@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# MuJoCo + capture artifacts
+MUJOCO_LOG.TXT
+*.mp4
+
+# LeRobot data and training output (large, regenerable)
+datasets/
+outputs/
