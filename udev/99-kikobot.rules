@@ -1,0 +1,15 @@
+# Ubuntu: stable name and access for the Kiko-Bot servo adapter.
+#
+#   sudo cp udev/99-kikobot.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# Then replug the adapter and use --robot.port=/dev/kikobot.
+# Remove the lines for chips you do not have if another device uses them.
+
+# Feetech URT-1 / Waveshare bus servo adapter (CH343, enumerates as ttyACM*).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", MODE="0666", SYMLINK+="kikobot"
+# CH340 clones (ttyUSB*).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", MODE="0666", SYMLINK+="kikobot"
+# FTDI adapters. Their 16 ms latency timer adds up to 16 ms to every position
+# read; drop it to 1 ms.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="0666", SYMLINK+="kikobot", RUN+="/bin/sh -c 'echo 1 > /sys/bus/usb-serial/devices/%k/latency_timer'"
