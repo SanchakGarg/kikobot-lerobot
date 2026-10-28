@@ -1,0 +1,34 @@
+{
+    "url": "https://cad.onshape.com/documents/b313e5b77bc0c3115d0b8fae/w/0842eaf9723f46fb0fc6e9c6/e/3fbf8cd2abf6666c702549ec",
+    "output_format": "mujoco",
+    "additional_xml": "extras.xml",
+    "joint_properties": {
+        "default": {
+            "kp": 200,
+            "dampratio": 1,
+            "forcerange": 2.94,
+            "armature": 0.005,
+            "frictionloss": 0.1
+        },
+        "finger_*": {
+            "kp": 800,
+            "forcerange": 20
+        }
+    },
+    "geom_properties": {
+        "gripper_l": {
+            "collision": {
+                "friction": "2.0 0.05 0.005",
+                "condim": 4,
+                "solref": "0.004 1"
+            }
+        },
+        "gripper_r": {
+            "collision": {
+                "friction": "2.0 0.05 0.005",
+                "condim": 4,
+                "solref": "0.004 1"
+            }
+        }
+    }
+}
