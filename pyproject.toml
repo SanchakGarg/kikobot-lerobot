@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# LeRobot's register_third_party_plugins() imports the distribution name
+# VERBATIM as a module, so it must match the package directory exactly.
+# A hyphen here would silently break discovery.
+name = "lerobot_robot_kikobot"
+version = "0.1.0"
+description = "Kiko-Bot 6-DOF arm for LeRobot: MuJoCo sim, real Feetech arm and 6-DOF gamepad IK teleop"
+readme = "README.md"
+requires-python = ">=3.12"
+# lerobot is installed from source first (see README), so it is not pinned here.
+dependencies = [
+    "lerobot",
+    "mujoco>=3.16",
+    "numpy>=2",
+    "glfw>=2.9",
+    "feetech-servo-sdk>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["lerobot_robot_kikobot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
