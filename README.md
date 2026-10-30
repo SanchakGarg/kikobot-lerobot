@@ -77,9 +77,9 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ~/lerobot/.venv/bin/lerobot-teleoperate --robot.type=kikobot_sim --robot.viewer=true \
   --teleop.type=kikobot_gamepad
 
-# 7. Drive the real arm.
+# 7. Drive the real arm, with MuJoCo mirroring it live.
 ~/lerobot/.venv/bin/lerobot-teleoperate --robot.type=kikobot_follower \
-  --robot.port=/dev/ttyACM0 --robot.id=kikobot \
+  --robot.port=/dev/ttyACM0 --robot.id=kikobot --robot.viewer=true \
   --teleop.type=kikobot_gamepad
 ```
 
@@ -114,10 +114,10 @@ cd $HOME\kikobot-lerobot
   --robot.type=kikobot_sim --robot.viewer=true `
   --teleop.type=kikobot_gamepad
 
-# 5. Drive the real arm.
+# 5. Drive the real arm, with MuJoCo mirroring it live.
 & "$HOME\lerobot\.venv\Scripts\lerobot-teleoperate.exe" `
   --robot.type=kikobot_follower --robot.port=COM3 --robot.id=kikobot `
-  --teleop.type=kikobot_gamepad
+  --robot.viewer=true --teleop.type=kikobot_gamepad
 ```
 
 Replace `COM3` with the port from step 3 (also listed in Device Manager →
@@ -129,6 +129,12 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 ### Once it is running
 
 - The arm first holds where it is, then eases to the ready pose.
+- With `--robot.viewer=true` a MuJoCo window shows the arm in the pose the
+  servos actually report, so you can compare it with the real one. Leave
+  the flag out to run without a window.
+- J5 is inverted by default because its servo turns opposite to the model.
+  If a joint moves the wrong way on your arm, see
+  [joint direction](#joint-direction) in section 6.
 - Left stick and LT/RT move the gripper; right stick and LB/RB rotate it;
   hold A to close, B to open; X toggles precision mode; Y returns to ready.
   Full table in [section 4](#4-gamepad-controls).
@@ -333,7 +339,8 @@ Torque goes off. Move the arm by hand to the model's zero pose (all joints
 at mid-travel, the arm pointing straight up, as in `models/scene.xml` in the
 MuJoCo viewer) and press Enter. The file is saved under
 `~/.cache/huggingface/lerobot/calibration/robots/kikobot_follower/kikobot.json`.
-If a joint turns the wrong way, set its `drive_mode` to `1` in that file.
+If a joint turns the wrong way, add it to `--robot.inverted_joints`
+([joint direction](#joint-direction)) or set its `drive_mode` to `1` in that file.
 
 **3. Teleoperate.**
 
@@ -344,7 +351,20 @@ $V/lerobot-teleoperate --robot.type=kikobot_follower --robot.port=/dev/ttyACM0 \
 
 On connect the arm holds where it is (the goal is set to the measured
 position before torque comes on), then eases to the ready pose at reduced
-speed. Add `--robot.viewer=true` to mirror the measured joints in MuJoCo.
+speed.
+
+**See it in MuJoCo.** Add `--robot.viewer=true` to open a MuJoCo window that
+mirrors the measured joint angles live, the same model the sim uses. If the
+window and the real arm disagree on a joint, that joint's direction or zero
+is off (see below and step 2).
+
+<a id="joint-direction"></a>**Joint direction.** Some servos are mounted so
+that they turn opposite to the model. `--robot.inverted_joints` lists those
+joints and defaults to `[J5]`, which is how the Kiko-Bot is built. To change
+it, pass the full list: `--robot.inverted_joints='[J5,J3]'`, or
+`--robot.inverted_joints='[]'` for none. It applies with or without a
+calibration file. A `drive_mode` of `1` in the calibration file flips a
+joint as well, so a joint flipped in both places turns the normal way.
 
 Follower options (`--robot.<name>=`):
 
@@ -355,12 +375,13 @@ Follower options (`--robot.<name>=`):
 | `servo_ids` | `[1,2,3,4,5,6]` | Bus IDs of J1..J6 |
 | `gripper_id` | none | Bus ID of a gripper servo, if fitted |
 | `gripper_open_deg` / `gripper_closed_deg` | `0` / `-60` | Gripper servo angle at 100 % / 0 % |
+| `inverted_joints` | `[J5]` | Joints whose servo turns opposite to the model |
 | `cameras` | none | LeRobot cameras, e.g. `"{front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}"` |
 | `stream_hz` | `100` | Goal stream rate |
 | `read_every` | `3` | Read positions every Nth stream tick (≈33 Hz) |
 | `p_coefficient` / `d_coefficient` / `i_coefficient` | `16` / `32` / `0` | Servo position-loop gains |
 | `disable_torque_on_disconnect` | `false` | Off by default so the arm does not drop |
-| `viewer` | `false` | MuJoCo window mirroring the measured pose |
+| `viewer` | `false` | MuJoCo window mirroring the measured pose live |
 
 ---
 
@@ -450,7 +471,7 @@ all three with Python 3.11+.
 | `No gamepad found` | Plug the controller in, then restart (it is only detected at startup). The log lists every joystick GLFW sees; on Ubuntu, if none appear, run `sudo usermod -aG input $USER` and log in again. Xbox pads unknown to GLFW get the xpad layout automatically. |
 | Wrong device used as the gamepad | Pick its slot from the `Joystick slot N` log lines: `--teleop.joystick=N`. |
 | `Settings schema 'org.gnome.settings-daemon.plugins.xsettings' does not contain a key named 'antialiasing'` (Ubuntu) | Launched from a Snap app's terminal (e.g. Snap VS Code). Run from a normal terminal, or install VS Code from the `.deb`. |
-| A joint moves the wrong way | Set its `drive_mode` to `1` in the calibration file ([6](#6-drive-the-real-arm)). |
+| A joint moves the wrong way (opposite to the sim) | Compare with `--robot.viewer=true`, then list it in `--robot.inverted_joints` (default `[J5]`), e.g. `'[J5,J3]'` ([6](#joint-direction)). |
 | Arm wobbles after stopping | Measure and set `shaper_freq_hz` ([7](#7-tune-the-motion-input-shaping)), or lower `max_acceleration_deg_s2`. |
 | Arm feels sluggish | Raise `max_velocity_deg_s` / `max_acceleration_deg_s2`, or use `shaper_type=zv`. |
 | Servo buzzes while holding | Lower `--robot.p_coefficient` (try 12). |

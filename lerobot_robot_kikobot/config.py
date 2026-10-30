@@ -78,6 +78,9 @@ class KikobotFollowerConfig(RobotConfig):
     gripper_id: int | None = None
     gripper_open_deg: float = 0.0
     gripper_closed_deg: float = -60.0
+    # Joints whose servo turns opposite to the model. Applied on top of any
+    # calibration drive_mode, so it works with or without a calibration file.
+    inverted_joints: tuple[str, ...] = ("J5",)
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
 
     # Goal positions are streamed by a background thread at this rate, in one

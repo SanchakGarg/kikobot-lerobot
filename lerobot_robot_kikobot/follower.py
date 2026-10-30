@@ -58,6 +58,9 @@ class KikobotFollower(Robot):
         self.motor_ids = dict(zip(ARM_JOINTS, config.servo_ids))
         if config.gripper_id is not None:
             self.motor_ids["gripper"] = config.gripper_id
+        unknown = set(config.inverted_joints) - set(self.motor_ids)
+        if unknown:
+            raise ValueError(f"inverted_joints {sorted(unknown)} not in {list(self.motor_ids)}.")
         self.kin = ArmKinematics()
         self.lower = self.kin.lower.copy()
         self.upper = self.kin.upper.copy()
@@ -98,11 +101,15 @@ class KikobotFollower(Robot):
             range_min=0, range_max=RESOLUTION - 1,
         )
 
+    def _sign(self, motor: str, c: MotorCalibration) -> int:
+        sign = -1 if c.drive_mode else 1
+        return -sign if motor in self.config.inverted_joints else sign
+
     def _to_raw(self, q: np.ndarray) -> dict[int, int]:
         out = {}
         for motor, angle in zip(self.motor_ids, q):
             c = self._calib(motor)
-            sign = -1 if c.drive_mode else 1
+            sign = self._sign(motor, c)
             raw = c.homing_offset + sign * angle / RAD_PER_STEP
             out[self.motor_ids[motor]] = int(round(min(max(raw, c.range_min), c.range_max)))
         return out
@@ -111,7 +118,7 @@ class KikobotFollower(Robot):
         q = []
         for motor, servo_id in self.motor_ids.items():
             c = self._calib(motor)
-            sign = -1 if c.drive_mode else 1
+            sign = self._sign(motor, c)
             q.append(sign * (raw[servo_id] - c.homing_offset) * RAD_PER_STEP)
         return np.array(q)
 
