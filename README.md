@@ -16,6 +16,7 @@ trained on it, runs on the other.
 
 ## Contents
 
+0. [Quick start: real arm + gamepad](#0-quick-start-real-arm--gamepad)
 1. [Repository layout](#1-repository-layout)
 2. [Why the real arm stuttered, and the fix](#2-why-the-real-arm-stuttered-and-the-fix)
 3. [Install](#3-install)
@@ -27,6 +28,115 @@ trained on it, runs on the other.
 9. [Platform notes](#9-platform-notes)
 10. [Troubleshooting](#10-troubleshooting)
 11. [Commit messages](#11-commit-messages)
+
+---
+
+## 0. Quick start: real arm + gamepad
+
+The shortest path from a fresh machine to driving the physical arm with a
+gamepad. Each step is explained in more detail in sections 3–6.
+
+**Before you start**
+
+- Python 3.12+ and git installed.
+- The servo bus powered (12 V) and its USB adapter plugged into the computer.
+- An Xbox or PlayStation controller plugged in (USB) or paired (Bluetooth)
+  **before** you launch teleop. It is only detected at startup.
+- The arm clear of obstacles: on connect it eases to the ready pose.
+
+### Ubuntu (22.04 / 24.04)
+
+Run from a terminal on the desktop, not over bare SSH: the gamepad is read
+through GLFW, which needs a display.
+
+```bash
+# 1. System packages and serial port access (log out and back in after usermod).
+sudo apt install -y git python3.12-venv libgl1 libglfw3
+sudo usermod -aG dialout $USER
+
+# 2. LeRobot, from source, in its own venv.
+git clone https://github.com/huggingface/lerobot.git ~/lerobot
+cd ~/lerobot
+python3.12 -m venv .venv
+.venv/bin/pip install -e ".[core_scripts,training,feetech]"
+
+# 3. This plugin, into the same venv.
+git clone https://github.com/SanchakGarg/kikobot-lerobot.git ~/kikobot-lerobot
+cd ~/kikobot-lerobot
+~/lerobot/.venv/bin/pip install -e .
+
+# 4. Optional but recommended: stable /dev/kikobot name, 1 ms FTDI latency.
+sudo cp udev/99-kikobot.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+# Unplug and replug the servo adapter.
+
+# 5. Find the port (skip if you installed the udev rule: use /dev/kikobot).
+~/lerobot/.venv/bin/lerobot-find-port
+
+# 6. Try it in the sim first (no hardware moves).
+~/lerobot/.venv/bin/lerobot-teleoperate --robot.type=kikobot_sim --robot.viewer=true \
+  --teleop.type=kikobot_gamepad
+
+# 7. Drive the real arm.
+~/lerobot/.venv/bin/lerobot-teleoperate --robot.type=kikobot_follower \
+  --robot.port=/dev/ttyACM0 --robot.id=kikobot \
+  --teleop.type=kikobot_gamepad
+```
+
+Replace `/dev/ttyACM0` with what step 5 printed (or `/dev/kikobot`).
+To check the controller is seen by Linux: `ls /dev/input/by-id/ | grep -i joystick`.
+
+### Windows 10 / 11 (PowerShell)
+
+Install Python 3.12 from python.org (tick "Add python.exe to PATH") and
+Git for Windows first. If PowerShell refuses to run scripts, you do not need
+to activate the venv: the commands below call its executables directly.
+
+```powershell
+# 1. LeRobot, from source, in its own venv.
+git clone https://github.com/huggingface/lerobot.git $HOME\lerobot
+cd $HOME\lerobot
+py -3.12 -m venv .venv
+# NVIDIA GPU only: install CUDA torch first, or pip picks the CPU build.
+.venv\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+.venv\Scripts\pip install -e ".[core_scripts,training,feetech]"
+
+# 2. This plugin, into the same venv.
+git clone https://github.com/SanchakGarg/kikobot-lerobot.git $HOME\kikobot-lerobot
+cd $HOME\kikobot-lerobot
+& "$HOME\lerobot\.venv\Scripts\pip.exe" install -e .
+
+# 3. Find the port (unplug the adapter when asked). Usually COM3, COM4, ...
+& "$HOME\lerobot\.venv\Scripts\lerobot-find-port.exe"
+
+# 4. Try it in the sim first (no hardware moves).
+& "$HOME\lerobot\.venv\Scripts\lerobot-teleoperate.exe" `
+  --robot.type=kikobot_sim --robot.viewer=true `
+  --teleop.type=kikobot_gamepad
+
+# 5. Drive the real arm.
+& "$HOME\lerobot\.venv\Scripts\lerobot-teleoperate.exe" `
+  --robot.type=kikobot_follower --robot.port=COM3 --robot.id=kikobot `
+  --teleop.type=kikobot_gamepad
+```
+
+Replace `COM3` with the port from step 3 (also listed in Device Manager →
+Ports (COM & LPT)). The servo adapter needs its USB-serial driver: CH340/CH343
+adapters (Feetech URT-1, Waveshare) from the WCH website, FTDI from ftdichip.com.
+For FTDI adapters, set Device Manager → the port → Port Settings → Advanced →
+Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
+
+### Once it is running
+
+- The arm first holds where it is, then eases to the ready pose.
+- Left stick and LT/RT move the gripper; right stick and LB/RB rotate it;
+  hold A to close, B to open; X toggles precision mode; Y returns to ready.
+  Full table in [section 4](#4-gamepad-controls).
+- **Ctrl+C** stops teleop. Torque stays on so the arm does not drop; power
+  the servos off, or add `--robot.disable_torque_on_disconnect=true`, to let
+  it go limp.
+- If a joint turns the wrong way or the zero pose is off, calibrate once
+  ([section 6](#6-drive-the-real-arm)).
 
 ---
 
