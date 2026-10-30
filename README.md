@@ -444,6 +444,7 @@ all three with Python 3.11+.
 |---|---|
 | `kikobot_*` is not a valid type | The plugin failed to import, or the old KikoBot plugin with the same name is installed. Run the check in [3](#3-install). |
 | `Could not open /dev/ttyACM0` | Wrong port (`lerobot-find-port`), or not in `dialout` (log out and in after `usermod`). |
+| `There is no status packet!` | A servo stopped replying after answering the ping. Transactions are retried and sync read falls back to single reads automatically; if it persists, the full error names the servo: check its cable and the supply (a sagging 12 V drops replies). Waveshare adapter: jumper on **A**. |
 | `Servos [...] did not answer` | The bus has no 12 V, a cable is loose, or `--robot.servo_ids` is wrong. |
 | `glfw.init() failed` | No desktop session (e.g. bare SSH on Ubuntu). Run from the desktop. |
 | `No gamepad found` | Plug the controller in, then restart (it is only detected at startup). The log lists every joystick GLFW sees; on Ubuntu, if none appear, run `sudo usermod -aG input $USER` and log in again. Xbox pads unknown to GLFW get the xpad layout automatically. |

@@ -28,6 +28,9 @@ ADDR_LOCK = 55
 ADDR_PRESENT_POSITION = 56
 
 RESOLUTION = 4096
+# Attempts per request/reply transaction. A reply is occasionally lost on a
+# busy half-duplex bus; one retry almost always gets it.
+RETRIES = 3
 
 
 def _le16(value: int) -> list[int]:
@@ -49,6 +52,9 @@ class FeetechBus:
             ) from exc
         self.scs = scs
         self.ids = list(ids)
+        # Cleared on the first failed sync read if single reads still work:
+        # some servo firmware does not answer the sync-read instruction.
+        self.sync_read_supported = True
         self.port = scs.PortHandler(port)
         self.packet = scs.PacketHandler(0)  # 0: STS little-endian protocol.
         if not self.port.openPort():
@@ -73,10 +79,18 @@ class FeetechBus:
         if error:
             logger.warning("%s: servo reported %s", what, self.packet.getRxPacketError(error))
 
+    def _txrx(self, request, *args):
+        """Run a request/reply transaction, retrying lost replies."""
+        for _ in range(RETRIES):
+            out = request(self.port, *args)
+            if out[-2] == self.scs.COMM_SUCCESS:
+                break
+        return out
+
     def ping_all(self) -> None:
         missing = []
         for i in self.ids:
-            _, result, _ = self.packet.ping(self.port, i)
+            _, result, _ = self._txrx(self.packet.ping, i)
             if result != self.scs.COMM_SUCCESS:
                 missing.append(i)
         if missing:
@@ -86,16 +100,16 @@ class FeetechBus:
             )
 
     def read_byte(self, servo_id: int, address: int) -> int:
-        value, result, error = self.packet.read1ByteTxRx(self.port, servo_id, address)
+        value, result, error = self._txrx(self.packet.read1ByteTxRx, servo_id, address)
         self._check(result, error, f"read servo {servo_id} @{address}")
         return value
 
     def write_byte(self, servo_id: int, address: int, value: int) -> None:
-        result, error = self.packet.write1ByteTxRx(self.port, servo_id, address, value)
+        result, error = self._txrx(self.packet.write1ByteTxRx, servo_id, address, value)
         self._check(result, error, f"write servo {servo_id} @{address}")
 
     def write_word(self, servo_id: int, address: int, value: int) -> None:
-        result, error = self.packet.write2ByteTxRx(self.port, servo_id, address, value)
+        result, error = self._txrx(self.packet.write2ByteTxRx, servo_id, address, value)
         self._check(result, error, f"write servo {servo_id} @{address}")
 
     def set_eeprom_byte(self, servo_id: int, address: int, value: int) -> None:
@@ -111,14 +125,33 @@ class FeetechBus:
             self.write_byte(i, ADDR_TORQUE_ENABLE, int(enabled))
 
     def sync_read_positions(self) -> dict[int, int]:
-        result = self._reader.txRxPacket()
-        if result != self.scs.COMM_SUCCESS:
-            raise ConnectionError(f"sync read: {self.packet.getTxRxResult(result)}")
+        if self.sync_read_supported:
+            problem = ""
+            for _ in range(RETRIES):
+                result = self._reader.txRxPacket()
+                if result != self.scs.COMM_SUCCESS:
+                    problem = self.packet.getTxRxResult(result)
+                    continue
+                missing = [i for i in self.ids if not self._reader.isAvailable(i, ADDR_PRESENT_POSITION, 2)]
+                if not missing:
+                    return {
+                        i: _sign_magnitude(self._reader.getData(i, ADDR_PRESENT_POSITION, 2)) for i in self.ids
+                    }
+                problem = f"no data from servos {missing}"
+            # Fall back to one read per servo if that works; slower but fine
+            # at the default read rate.
+            out = self.read_positions()
+            self.sync_read_supported = False
+            logger.warning("Sync read failed (%s); reading servos one at a time instead.", problem)
+            return out
+        return self.read_positions()
+
+    def read_positions(self) -> dict[int, int]:
         out = {}
         for i in self.ids:
-            if not self._reader.isAvailable(i, ADDR_PRESENT_POSITION, 2):
-                raise ConnectionError(f"sync read: no data from servo {i}")
-            out[i] = _sign_magnitude(self._reader.getData(i, ADDR_PRESENT_POSITION, 2))
+            value, result, error = self._txrx(self.packet.read2ByteTxRx, i, ADDR_PRESENT_POSITION)
+            self._check(result, error, f"read servo {i} position")
+            out[i] = _sign_magnitude(value)
         return out
 
     def sync_write_goals(self, goals: dict[int, int]) -> None:
