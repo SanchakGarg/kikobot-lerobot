@@ -99,8 +99,9 @@ class KikobotFollowerConfig(RobotConfig):
 
     # Dropping torque lets a gravity-loaded arm fall, so the default keeps it on.
     disable_torque_on_disconnect: bool = False
-    # MuJoCo window mirroring the measured joint angles.
-    viewer: bool = False
+    # Live view of the commanded (sim) motion: `rerun` (default), `mujoco`
+    # (native window), `both` or `none`. Rerun also plots commanded vs measured.
+    display: str = "rerun"
 
 
 @TeleoperatorConfig.register_subclass("kikobot_gamepad")

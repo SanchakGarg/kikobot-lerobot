@@ -77,9 +77,9 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ~/lerobot/.venv/bin/lerobot-teleoperate --robot.type=kikobot_sim --robot.viewer=true \
   --teleop.type=kikobot_gamepad
 
-# 7. Drive the real arm, with MuJoCo mirroring it live.
+# 7. Drive the real arm. A rerun window opens with the simulated arm.
 ~/lerobot/.venv/bin/lerobot-teleoperate --robot.type=kikobot_follower \
-  --robot.port=/dev/ttyACM0 --robot.id=kikobot --robot.viewer=true \
+  --robot.port=/dev/ttyACM0 --robot.id=kikobot \
   --teleop.type=kikobot_gamepad
 ```
 
@@ -114,10 +114,10 @@ cd $HOME\kikobot-lerobot
   --robot.type=kikobot_sim --robot.viewer=true `
   --teleop.type=kikobot_gamepad
 
-# 5. Drive the real arm, with MuJoCo mirroring it live.
+# 5. Drive the real arm. A rerun window opens with the simulated arm.
 & "$HOME\lerobot\.venv\Scripts\lerobot-teleoperate.exe" `
   --robot.type=kikobot_follower --robot.port=COM3 --robot.id=kikobot `
-  --robot.viewer=true --teleop.type=kikobot_gamepad
+  --teleop.type=kikobot_gamepad
 ```
 
 Replace `COM3` with the port from step 3 (also listed in Device Manager →
@@ -129,9 +129,11 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 ### Once it is running
 
 - The arm first holds where it is, then eases to the ready pose.
-- With `--robot.viewer=true` a MuJoCo window shows the arm in the pose the
-  servos actually report, so you can compare it with the real one. Leave
-  the flag out to run without a window.
+- A rerun window opens by itself. It shows the arm as the simulation moves
+  it (the commanded motion, not a copy of the real arm), next to a plot per
+  joint of commanded vs measured angle. If the real arm does something the
+  picture does not, the plots show which joint. `--robot.display=mujoco`
+  shows the same in a MuJoCo window instead; `none` turns it off.
 - J5 is inverted by default because its servo turns opposite to the model.
   If a joint moves the wrong way on your arm, see
   [joint direction](#joint-direction) in section 6.
@@ -353,10 +355,27 @@ On connect the arm holds where it is (the goal is set to the measured
 position before torque comes on), then eases to the ready pose at reduced
 speed.
 
-**See it in MuJoCo.** Add `--robot.viewer=true` to open a MuJoCo window that
-mirrors the measured joint angles live, the same model the sim uses. If the
-window and the real arm disagree on a joint, that joint's direction or zero
-is off (see below and step 2).
+<a id="live-view"></a>**Live view.** While the arm runs, a rerun window
+shows the simulated arm following the same shaped trajectory that is
+streamed to the servos, i.e. what the sim would do with the same commands.
+Beside it, each joint gets a plot of its commanded and measured angle. The
+real arm should look like the picture; where it does not, the plots show
+which joint lags, overshoots or moves the opposite way (then fix its
+direction below, or its zero in step 2).
+
+`--robot.display=` picks where it is shown:
+
+| Value | Shows |
+|---|---|
+| `rerun` (default) | The MuJoCo arm rendered into rerun, plus commanded/measured plots |
+| `mujoco` | The MuJoCo arm in the native, interactive MuJoCo window (macOS: start with `mjpython`) |
+| `both` | The MuJoCo window and rerun together |
+| `none` | Nothing |
+
+LeRobot's own `--display_data=true` is separate and off by default. It adds
+a second rerun recording with the raw observation and action values and the
+camera images; in the rerun viewer, switch between the two recordings in
+the left panel.
 
 <a id="joint-direction"></a>**Joint direction.** Some servos are mounted so
 that they turn opposite to the model. `--robot.inverted_joints` lists those
@@ -381,7 +400,7 @@ Follower options (`--robot.<name>=`):
 | `read_every` | `3` | Read positions every Nth stream tick (≈33 Hz) |
 | `p_coefficient` / `d_coefficient` / `i_coefficient` | `16` / `32` / `0` | Servo position-loop gains |
 | `disable_torque_on_disconnect` | `false` | Off by default so the arm does not drop |
-| `viewer` | `false` | MuJoCo window mirroring the measured pose live |
+| `display` | `rerun` | Live view of the commanded (sim) motion: `rerun`, `mujoco`, `both`, `none` ([live view](#live-view)) |
 
 ---
 
@@ -466,12 +485,13 @@ all three with Python 3.11+.
 | `kikobot_*` is not a valid type | The plugin failed to import, or the old KikoBot plugin with the same name is installed. Run the check in [3](#3-install). |
 | `Could not open /dev/ttyACM0` | Wrong port (`lerobot-find-port`), or not in `dialout` (log out and in after `usermod`). |
 | `There is no status packet!` | A servo stopped replying after answering the ping. Transactions are retried and sync read falls back to single reads automatically; if it persists, the full error names the servo: check its cable and the supply (a sagging 12 V drops replies). Waveshare adapter: jumper on **A**. |
+| No rerun window opens | `rerun-sdk` comes with LeRobot's `core_scripts` extra; otherwise `pip install rerun-sdk`. Over SSH there is no display: use `--robot.display=none`. |
 | `Servos [...] did not answer` | The bus has no 12 V, a cable is loose, or `--robot.servo_ids` is wrong. |
 | `glfw.init() failed` | No desktop session (e.g. bare SSH on Ubuntu). Run from the desktop. |
 | `No gamepad found` | Plug the controller in, then restart (it is only detected at startup). The log lists every joystick GLFW sees; on Ubuntu, if none appear, run `sudo usermod -aG input $USER` and log in again. Xbox pads unknown to GLFW get the xpad layout automatically. |
 | Wrong device used as the gamepad | Pick its slot from the `Joystick slot N` log lines: `--teleop.joystick=N`. |
 | `Settings schema 'org.gnome.settings-daemon.plugins.xsettings' does not contain a key named 'antialiasing'` (Ubuntu) | Launched from a Snap app's terminal (e.g. Snap VS Code). Run from a normal terminal, or install VS Code from the `.deb`. |
-| A joint moves the wrong way (opposite to the sim) | Compare with `--robot.viewer=true`, then list it in `--robot.inverted_joints` (default `[J5]`), e.g. `'[J5,J3]'` ([6](#joint-direction)). |
+| A joint moves the wrong way (opposite to the sim) | Compare the real arm with the rerun view (a joint's measured line moves opposite to its commanded line), then list it in `--robot.inverted_joints` (default `[J5]`), e.g. `'[J5,J3]'` ([6](#joint-direction)). |
 | Arm wobbles after stopping | Measure and set `shaper_freq_hz` ([7](#7-tune-the-motion-input-shaping)), or lower `max_acceleration_deg_s2`. |
 | Arm feels sluggish | Raise `max_velocity_deg_s` / `max_acceleration_deg_s2`, or use `shaper_type=zv`. |
 | Servo buzzes while holding | Lower `--robot.p_coefficient` (try 12). |

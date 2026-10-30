@@ -13,8 +13,6 @@ import math
 from functools import cached_property
 from typing import Any
 
-import mujoco
-import mujoco.viewer
 import numpy as np
 
 from lerobot.cameras import make_cameras_from_configs
@@ -24,6 +22,7 @@ from lerobot.robots import Robot
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from .config import ARM_JOINTS, KikobotFollowerConfig
+from .display import DISPLAY_MODES, SimDisplay
 from .feetech import (
     ADDR_ACCELERATION,
     ADDR_D_COEFFICIENT,
@@ -58,6 +57,8 @@ class KikobotFollower(Robot):
         self.motor_ids = dict(zip(ARM_JOINTS, config.servo_ids))
         if config.gripper_id is not None:
             self.motor_ids["gripper"] = config.gripper_id
+        if config.display not in DISPLAY_MODES:
+            raise ValueError(f"display must be one of {DISPLAY_MODES}, not {config.display!r}.")
         unknown = set(config.inverted_joints) - set(self.motor_ids)
         if unknown:
             raise ValueError(f"inverted_joints {sorted(unknown)} not in {list(self.motor_ids)}.")
@@ -73,7 +74,7 @@ class KikobotFollower(Robot):
         self.cameras = make_cameras_from_configs(config.cameras)
         self._target: np.ndarray | None = None
         self._last_gripper_pct = 100.0
-        self._viewer = None
+        self._display: SimDisplay | None = None
 
     # ---------------------------------------------------------------- features
 
@@ -221,15 +222,12 @@ class KikobotFollower(Robot):
 
         for cam in self.cameras.values():
             cam.connect()
-        if cfg.viewer:
-            self._open_viewer()
+        if cfg.display != "none":
+            self._display = SimDisplay(cfg.display)
         logger.info(
             "%s connected on %s; streaming at %.0f Hz with a %s shaper at %.1f Hz.",
             self, cfg.port, cfg.stream_hz, cfg.motion.shaper_type, cfg.motion.shaper_freq_hz,
         )
-
-    def _open_viewer(self) -> None:
-        self._viewer = mujoco.viewer.launch_passive(self.kin.model, self.kin.data)
 
     @check_if_not_connected
     def disconnect(self) -> None:
@@ -245,9 +243,9 @@ class KikobotFollower(Robot):
             self.bus = None
         for cam in self.cameras.values():
             cam.disconnect()
-        if self._viewer is not None:
-            self._viewer.close()
-            self._viewer = None
+        if self._display is not None:
+            self._display.close()
+            self._display = None
         logger.info("%s disconnected.", self)
 
     # --------------------------------------------------------------------- i/o
@@ -270,10 +268,8 @@ class KikobotFollower(Robot):
         )
         for key, cam in self.cameras.items():
             obs[key] = cam.read_latest() if hasattr(cam, "read_latest") else cam.async_read()
-        if self._viewer is not None and self._viewer.is_running():
-            self.kin.data.qpos[self.kin.qpos_adr] = q[:6]
-            mujoco.mj_forward(self.kin.model, self.kin.data)
-            self._viewer.sync()
+        if self._display is not None:
+            self._display.update(self.streamer.commanded, self._last_gripper_pct, q)
         return obs
 
     @check_if_not_connected
