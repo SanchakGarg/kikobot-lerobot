@@ -103,7 +103,7 @@ class KikobotFollowerConfig(RobotConfig):
 @TeleoperatorConfig.register_subclass("kikobot_gamepad")
 @dataclass
 class KikobotGamepadConfig(TeleoperatorConfig):
-    # GLFW joystick slot: 0 is the first controller plugged in.
+    # Preferred GLFW joystick slot. If it holds no gamepad, the first one found is used.
     joystick: int = 0
     fps: int = 30
     linear_speed_m_s: float = 0.12

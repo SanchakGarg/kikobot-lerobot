@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import math
+import sys
 import time
 from typing import Any
 
@@ -46,6 +47,21 @@ IK_ITERATIONS = 4
 POS_TOLERANCE_M = 0.0015
 ROT_TOLERANCE_RAD = math.radians(1.0)
 STEP_FRACTIONS = (1.0, 0.5, 0.25)
+
+# Button and axis layout of Linux's xpad driver (Xbox 360 / One / Series
+# pads over USB). Applied to Xbox pads missing from GLFW's built-in mapping
+# database, which GLFW otherwise reports as a joystick but not a gamepad.
+XPAD_MAPPING = (
+    "a:b0,b:b1,x:b2,y:b3,leftshoulder:b4,rightshoulder:b5,back:b6,start:b7,guide:b8,"
+    "leftstick:b9,rightstick:b10,leftx:a0,lefty:a1,lefttrigger:a2,rightx:a3,righty:a4,"
+    "righttrigger:a5,dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,platform:Linux,"
+)
+MAX_JOYSTICKS = 16
+
+
+def _text(value: bytes | str | None) -> str:
+    """pyGLFW returns some joystick strings as bytes."""
+    return value.decode(errors="replace") if isinstance(value, bytes) else (value or "")
 
 
 class KikobotGamepad(Teleoperator):
@@ -88,13 +104,43 @@ class KikobotGamepad(Teleoperator):
                 "from the desktop, not a bare SSH shell)."
             )
         self._glfw = glfw
-        self._joystick = glfw.JOYSTICK_1 + self.config.joystick
-        if glfw.joystick_is_gamepad(self._joystick):
-            logger.info("Gamepad: %s", glfw.get_gamepad_name(self._joystick))
+        self._joystick = self._find_gamepad(glfw)
+        self._go_ready()
+
+    def _find_gamepad(self, glfw) -> int:
+        """The configured slot if it holds a gamepad, else the first slot that does."""
+        present = [glfw.JOYSTICK_1 + i for i in range(MAX_JOYSTICKS) if glfw.joystick_present(glfw.JOYSTICK_1 + i)]
+        for j in present:
+            name = _text(glfw.get_joystick_name(j))
+            if (
+                sys.platform.startswith("linux")
+                and not glfw.joystick_is_gamepad(j)
+                and any(k in name.lower() for k in ("xbox", "x-box", "microsoft"))
+            ):
+                guid = _text(glfw.get_joystick_guid(j))
+                glfw.update_gamepad_mappings(f"{guid},Xbox controller (xpad),{XPAD_MAPPING}")
+                logger.info("Added xpad mapping for %r (GUID %s).", name, guid)
+            logger.info(
+                "Joystick slot %d: %r, gamepad=%s",
+                j - glfw.JOYSTICK_1, name, bool(glfw.joystick_is_gamepad(j)),
+            )
+
+        preferred = glfw.JOYSTICK_1 + self.config.joystick
+        gamepads = [j for j in present if glfw.joystick_is_gamepad(j)]
+        if preferred in gamepads:
+            chosen = preferred
+        elif gamepads:
+            chosen = gamepads[0]
+            logger.info("No gamepad on slot %d, using slot %d.", self.config.joystick, chosen - glfw.JOYSTICK_1)
         else:
             # GLFW only scans for controllers at init, so it must be in first.
-            logger.warning("No gamepad on slot %d. Plug it in, then restart.", self.config.joystick)
-        self._go_ready()
+            logger.warning(
+                "No gamepad found (%d joystick(s) present, none with a gamepad mapping). "
+                "Plug it in, then restart.", len(present),
+            )
+            return preferred
+        logger.info("Gamepad: %s (slot %d)", glfw.get_gamepad_name(chosen), chosen - glfw.JOYSTICK_1)
+        return chosen
 
     def _go_ready(self) -> None:
         self._q = self.kin.ready_q()
