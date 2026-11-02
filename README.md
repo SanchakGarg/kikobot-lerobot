@@ -439,8 +439,8 @@ calibrated the wrong way round: [flip it](#flip-joint).
 <a id="flip-joint"></a>**Flip a joint.** Run calibrate and type `flip J3`
 (several at once: `flip J3 J4`; the gripper too). The saved min and max
 trade places, so the joint turns the other way; nothing moves and nothing
-else is asked. Then `check` again. Flip the home pose's joints too, by
-setting it again with `home`: its angles were read with the old direction.
+else is asked. Then `check` again. A saved [home pose](#home-pose) is
+updated with it, so it stays the same physical pose of the arm.
 
 `lerobot-teleoperate` and `lerobot-record` load that file automatically when
 given the same `--robot.id` (here `kikobot`); the log says

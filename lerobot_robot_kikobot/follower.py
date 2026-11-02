@@ -217,7 +217,27 @@ class KikobotFollower(Robot):
             print(f"  {motor} flipped.")
         self._save_calibration()
         print(f"Saved to {self.calibration_fpath}")
+        self._mirror_home([names[j.lower()] for j in joints])
         return True
+
+    def _mirror_home(self, motors: list[str]) -> None:
+        """Keep the saved home the same physical pose after `motors` were flipped."""
+        path = home_pose_path(self.id, self.calibration_dir)
+        if not path.is_file():
+            return
+        home = json.loads(path.read_text())
+        for motor in motors:
+            if motor not in home:
+                continue
+            if motor == "gripper":
+                # % open runs the other way once the ends trade places.
+                home[motor] = round(100.0 - home[motor], 1)
+            else:
+                # A flipped joint reads lower + upper - angle at the same place.
+                i = list(self.motor_ids).index(motor)
+                home[motor] = round(float(np.rad2deg(self.lower[i] + self.upper[i])) - home[motor], 2)
+        path.write_text(json.dumps(home, indent=4) + "\n")
+        print(f"Home pose updated to the same physical pose: {home}")
 
     def _bus_retry(self, what: str, call):
         """Run `call(bus)`; if the bus drops, wait for the user, reopen it and retry.
