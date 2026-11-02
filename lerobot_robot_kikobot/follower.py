@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 from functools import cached_property
 from typing import Any
 
@@ -28,10 +29,12 @@ from .display import DISPLAY_MODES, SimDisplay
 from .feetech import (
     ADDR_ACCELERATION,
     ADDR_D_COEFFICIENT,
+    ADDR_GOAL_POSITION,
     ADDR_GOAL_SPEED,
     ADDR_I_COEFFICIENT,
     ADDR_P_COEFFICIENT,
     ADDR_RETURN_DELAY,
+    ADDR_TORQUE_ENABLE,
     RESOLUTION,
     FeetechBus,
 )
@@ -46,6 +49,11 @@ RAD_PER_STEP = 2.0 * math.pi / RESOLUTION
 # Uncalibrated default: the servo's mid-scale reading is the joint's zero,
 # which is how the arm was assembled.
 DEFAULT_HOMING = RESOLUTION // 2
+
+# Speed of the move to centre after a joint is calibrated, the only motion
+# calibration makes.
+CENTER_SPEED_DEG_S = 25.0
+CENTER_RATE_HZ = 50.0
 
 # Which physical way each joint's min and max lie, read off the MuJoCo model.
 # "Front" is the way the arm reaches in the ready pose; stand behind the base
@@ -96,6 +104,8 @@ class KikobotFollower(Robot):
         self._display: SimDisplay | None = None
         # The bus during calibrate(), reopened there if it drops.
         self._cal_bus: FeetechBus | None = None
+        # Joints calibrate() has moved to their centre and holds there.
+        self._held: list[str] = []
 
     # ---------------------------------------------------------------- features
 
@@ -162,7 +172,7 @@ class KikobotFollower(Robot):
             closed_is_min = self.config.gripper_closed_deg < self.config.gripper_open_deg
             return ("jaws closed", "jaws open") if closed_is_min else ("jaws open", "jaws closed")
         lo, hi = JOINT_ENDS[motor]
-        return (f"min ({np.rad2deg(self.lower[i]):+.0f} deg): {lo}", f"max ({np.rad2deg(self.upper[i]):+.0f} deg): {hi}")
+        return (f"{np.rad2deg(self.lower[i]):+.0f} deg, {lo}", f"{np.rad2deg(self.upper[i]):+.0f} deg, {hi}")
 
     def _calibration_plan(self) -> tuple[list[str], str]:
         """Joints to calibrate, or "home" / "check" for those steps alone."""
@@ -263,8 +273,6 @@ class KikobotFollower(Robot):
             try:
                 cfg = self.config
                 self._cal_bus = FeetechBus(cfg.port, cfg.baudrate, list(self.motor_ids.values()))
-                # A servo that browned out may come back up with torque on.
-                self._cal_bus.set_torque(False)
             except Exception as exc:
                 print(f"  Could not reopen {self.config.port}: {exc}")
 
@@ -284,12 +292,10 @@ class KikobotFollower(Robot):
     def _set_home(self) -> None:
         """Save the pose the arm is held in as the teleop's start and Y pose."""
         path = home_pose_path(self.id, self.calibration_dir)
-        answer = input(
-            "\nHome pose (torque is off, support the arm): move it to where teleop should\n"
-            "start and where Y returns it, jaws included, then ENTER. 's' and ENTER skips: "
+        input(
+            "\nHome pose (every joint is limp, support the arm): move it to where teleop\n"
+            "should start and where Y returns it, jaws included, then ENTER: "
         )
-        if answer.strip().lower() == "s":
-            return
         q = self._from_raw(self._bus_retry("reading the home pose", lambda b: b.read_positions()))
         home = {j: round(float(np.rad2deg(q[i])), 2) for i, j in enumerate(ARM_JOINTS)}
         if self.config.gripper_id is not None:
@@ -303,7 +309,8 @@ class KikobotFollower(Robot):
     def calibrate(self) -> None:
         """Map each joint's travel onto the model's range: min, middle, max by hand.
 
-        Torque stays off the whole time, and afterwards: the servos never move.
+        Every servo is limp. The only motion is a slow move of the joint just
+        calibrated to its centre, one joint at a time, after the user confirms.
         """
         motors, only = self._calibration_plan()
         if not motors and not only:
@@ -318,19 +325,22 @@ class KikobotFollower(Robot):
             self._bus_retry("turning torque off", lambda b: b.set_torque(False))
             if motors:
                 print(
-                    "\nTorque is off and stays off: support the arm. For each joint, move it\n"
-                    "by hand to its min end, then to any point in between, then to its max\n"
-                    "end, pressing ENTER at each. Min and max are the MuJoCo model's joint\n"
-                    "limits. The middle point only tells which way the joint turned.\n"
-                    "Move the joints slowly: a servo turned fast by hand feeds power back\n"
-                    "into the bus. Each joint is saved as soon as it is done.\n"
+                    "\nEvery servo is limp: support the arm. One joint at a time, move it by\n"
+                    "hand to its min end, then to any point in between, then to its max end,\n"
+                    "pressing ENTER at each. Min and max are the MuJoCo model's joint limits;\n"
+                    "each joint's are described before you start it. The middle point only\n"
+                    "tells which way the joint turned. Move slowly: a servo turned fast by\n"
+                    "hand feeds power back into the bus. Each joint is saved as soon as it\n"
+                    "is done; then, if you say so, only that joint turns slowly to its centre\n"
+                    "and holds until you release it.\n"
                 )
             for motor in motors:
                 self._calibrate_joint(motor)
             # Read with the new calibration, so it is in the model's angles.
             if only == "check":
                 self._check()
-            else:
+            elif only == "home" or input("\nSet the home pose now? ENTER for yes, 's' and ENTER to skip: ").strip().lower() != "s":
+                self._release_held("so you can pose it")
                 self._set_home()
         finally:
             if own_bus:
@@ -339,7 +349,12 @@ class KikobotFollower(Robot):
                 # It may have been reopened.
                 self.bus = self._cal_bus
             self._cal_bus = None
-        print("Torque is still off. lerobot-teleoperate uses this from now on.")
+        if self._held:
+            print(f"{' '.join(self._held)} stay powered at their centres; the rest are limp.")
+        else:
+            print("Every joint is limp.")
+        self._held = []
+        print("lerobot-teleoperate uses this calibration from now on.")
 
     def _calibrate_joint(self, motor: str) -> None:
         i = list(self.motor_ids).index(motor)
@@ -349,10 +364,16 @@ class KikobotFollower(Robot):
         # offset until the joint is done, so stopping half-way leaves the old
         # calibration valid.
         old_offset = self._bus_retry(f"reading {motor}'s offset", lambda b: b.homing_offset(servo_id))
+        print(
+            f"\n--- {motor} --- (every servo is limp; support the arm)\n"
+            f"  min = {lo_name}\n"
+            f"  max = {hi_name}\n"
+            "  Turn it to min, then sweep it through the middle to max."
+        )
         while True:
             readings = []
-            for step in (lo_name, "middle, anywhere", hi_name):
-                input(f"  {motor}: move to {step}, then ENTER ")
+            for step in ("min", "middle (anywhere in between)", "max"):
+                input(f"  {motor}: at {step}? ENTER ")
                 # Only this servo: a loose cable elsewhere does not matter here.
                 raw = self._bus_retry(f"reading {motor}", lambda b: b.read_position(servo_id))
                 readings.append(raw + old_offset)
@@ -381,6 +402,47 @@ class KikobotFollower(Robot):
         )
         self._save_calibration()
         print(f"  {motor} saved to {self.calibration_fpath}")
+        self._center_joint(motor)
+
+    def _center_joint(self, motor: str) -> None:
+        """Move just this joint, slowly, to the middle of its range, and hold it there.
+
+        The only motion calibration makes, and only after the user says go.
+        Joints not calibrated yet stay limp.
+        """
+        servo_id = self.motor_ids[motor]
+        c = self.calibration[motor]
+        target = (c.range_min + c.range_max) // 2
+        answer = input(
+            f"  Only {motor} will now power on, turn slowly to the centre of its range\n"
+            f"  ({CENTER_SPEED_DEG_S:.0f} deg/s) and hold there. Joints not calibrated yet stay limp.\n"
+            "  Keep clear, then ENTER to move it, or 's' and ENTER to leave it limp: "
+        )
+        if answer.strip().lower() == "s":
+            return
+
+        def move(bus: FeetechBus) -> None:
+            start = bus.read_position(servo_id)
+            # Goal = where it is before torque comes on, so nothing jumps.
+            bus.write_word(servo_id, ADDR_GOAL_POSITION, start)
+            bus.write_byte(servo_id, ADDR_TORQUE_ENABLE, 1)
+            steps_per_tick = CENTER_SPEED_DEG_S / 360.0 * RESOLUTION / CENTER_RATE_HZ
+            n = max(1, math.ceil(abs(target - start) / steps_per_tick))
+            for k in range(1, n + 1):
+                bus.write_word(servo_id, ADDR_GOAL_POSITION, round(start + (target - start) * k / n))
+                time.sleep(1.0 / CENTER_RATE_HZ)
+
+        self._bus_retry(f"moving {motor} to centre", move)
+        self._held.append(motor)
+        print(f"  {motor} is holding at its centre.")
+
+    def _release_held(self, why: str) -> None:
+        """Let the joints held at their centres go limp, once the user is ready."""
+        if not self._held:
+            return
+        input(f"\n{' '.join(self._held)} are powered. Support the arm, then ENTER to release them {why}: ")
+        self._bus_retry("releasing the joints", lambda b: b.set_torque(False))
+        self._held = []
 
     def configure(self) -> None:
         bus = self.bus

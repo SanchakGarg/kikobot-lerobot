@@ -362,9 +362,11 @@ Windows (PowerShell):
   --robot.type=kikobot_follower --robot.port=COM3 --robot.id=kikobot
 ```
 
-The servos never move during calibration: torque goes off as soon as it
-connects and stays off when it ends, so **support the arm the whole time**
-and lower it to rest before the last Enter.
+Every servo goes limp as soon as it connects, so **support the arm**. The
+only motion is the one you confirm after each joint: that joint alone turns
+slowly (25°/s) to the centre of its range and holds there. Joints not yet
+calibrated stay limp the whole time, so the one you are moving by hand is
+always free, and the ones already done hold the arm up.
 
 1. If a calibration file exists, it asks what to do:
    - **Enter**: keep it as it is;
@@ -400,10 +402,15 @@ and lower it to rest before the last Enter.
    | J5 (−140° / +140°) | wrist swung to the left | to the right |
    | J6 (−175° / +175°) | jaws turned clockwise, seen from above with the jaws pointing down | counter-clockwise |
    | gripper | jaws closed | jaws open |
+   Before each joint it prints which way its min and max lie (the table
+   below), then asks for min, middle and max in turn.
 3. Each joint prints its travel in servo steps and how it compares with
    the servo's nominal 4096 steps per turn. A warning means the measured
    travel is more than 15 % off the model's: type `r` to redo that joint
    with it pushed fully to its ends, or Enter to keep it (e.g. a geared joint).
+4. The joint is saved, and it says that only this joint will power on and
+   turn to its centre. Keep clear and press Enter, and it moves there
+   slowly and holds; `s` leaves it limp instead. Then the next joint.
 
 What is stored: each servo's Homing_Offset register is set so that the
 middle of its travel reads 2048 (the range never wraps), and the file
@@ -420,9 +427,12 @@ and press Enter to retry; the port is reopened if the adapter dropped. Move
 joints slowly by hand: a servo turned fast acts as a generator and feeds
 voltage spikes back into the bus.
 
-<a id="home-pose"></a>**Home pose.** After the joints (or alone, with
-`home`), it asks you to hold the arm in its home pose and press Enter
-(`s` skips). That is where teleop starts and where **Y** returns the arm,
+<a id="home-pose"></a>**Home pose.** After the joints it asks whether to
+set the home pose (`s` skips; `home` at the first prompt does only this).
+It first releases the joints holding at their centres, after you press
+Enter, so support the arm. Then hold it in its home pose and press Enter.
+If you skip it, the calibrated joints stay powered at their centres when
+calibration ends. That is where teleop starts and where **Y** returns the arm,
 jaws included. It is saved as `kikobot_home.json` next to the calibration
 file. The gamepad reads it for `--teleop.robot_id` (default `kikobot`; use
 the same name as `--robot.id`); with none saved it uses the built-in ready
