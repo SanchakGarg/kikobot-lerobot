@@ -56,7 +56,7 @@ def test_one_placement_per_item_and_counts():
         w = sum(p.active and L.KINDS[p.kind].writing for p in lay)
         s = sum(p.active and not L.KINDS[p.kind].writing for p in lay)
         # Asked for 6..14 and 3..8; a crowded desk can fit fewer writing tools.
-        assert 4 <= w <= 14 and 3 <= s <= 8
+        assert 3 <= w <= 7 and 2 <= s <= 4
 
 
 def test_active_items_in_reach_and_parked_ones_under_the_table():

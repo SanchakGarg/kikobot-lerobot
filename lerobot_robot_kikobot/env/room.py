@@ -72,7 +72,7 @@ class Light:
     dir: tuple[float, float, float] = (0.0, 0.0, -1.0)
     size: tuple[float, float] = (0.3, 0.3)
     intensity: float = 1.0
-    temp_k: float = 5000.0
+    temp_k: float = 5600.0  # Neutral white LED.
     castshadow: bool = False
 
 
@@ -110,7 +110,7 @@ class LightState:
 
 def _materials() -> dict[str, Material]:
     m = [
-        Material("table_top", (0.52, 0.53, 0.55), 0.55, 0.0, "speckle", 2.0, contrast=0.12),  # grey laminate
+        Material("table_top", (0.40, 0.41, 0.43), 0.55, 0.0, "speckle", 2.0, contrast=0.12),  # grey laminate
         Material("table_frame", (0.22, 0.23, 0.25), 0.35, 0.8),
         Material("table_shelf", (0.38, 0.39, 0.41), 0.6, 0.0, "speckle", 2.0, contrast=0.15),
         Material("floor", (0.45, 0.46, 0.48), 0.7, 0.0, "speckle", 1.0, contrast=0.3),  # grey epoxy
@@ -289,8 +289,11 @@ def _lights() -> list[Light]:
     lights = []
     for i, x in enumerate((-1.0, 0.6, 2.2)):
         for j, y in enumerate((-0.9, 0.9)):
-            # The panel nearest above the table casts the shadows.
-            lights.append(Light(f"panel_{i}{j}", "panel", (x, y, CEILING_Z - 0.012), castshadow=(i, j) == (1, 0)))
+            lights.append(Light(f"panel_{i}{j}", "panel", (x, y, CEILING_Z - 0.012)))
+    # A task light over the arm's table, as labs have over a bench: it lights
+    # the work area most and casts the shadows that show where things are.
+    lights.append(Light("task", "panel", (0.1, 0.0, CEILING_Z - 0.012), size=(0.3, 0.15), intensity=1.4,
+                        castshadow=True))
     # Daylight through the +Y window, slanting down into the room.
     lights.append(Light("sun", "sun", (0.9, ROOM_HALF_Y, CEILING_Z), _sun_dir(0.0, 40.0), intensity=1.0, temp_k=5800.0, castshadow=True))
     return lights
@@ -360,7 +363,7 @@ def sample_lighting(rng: np.random.Generator, spec: RoomSpec) -> list[LightState
     random angle.
     """
     level = rng.uniform(0.7, 1.3)
-    temp = rng.uniform(3800.0, 6500.0)
+    temp = rng.uniform(4300.0, 6500.0)
     panels = [l for l in spec.lights if l.kind == "panel"]
     on = rng.random(len(panels)) >= 0.1
     while on.sum() < 2:

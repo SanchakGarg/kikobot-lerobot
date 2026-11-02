@@ -481,9 +481,9 @@ def park_pose(index: int, item: PoolItem) -> tuple[float, float, float]:
 def sample_desk(
     rng: np.random.Generator,
     pool: list[PoolItem],
-    n_writing: tuple[int, int] = (6, 14),
-    n_supplies: tuple[int, int] = (3, 8),
-    stack_p: float = 0.35,
+    n_writing: tuple[int, int] = (3, 7),
+    n_supplies: tuple[int, int] = (2, 4),
+    stack_p: float = 0.2,
     tries: int = 200,
 ) -> list[Placement]:
     """Which items are on the desk this episode, their poses and their looks.

@@ -29,13 +29,28 @@ def _item_positions(w):
 def test_desk_settles_on_the_table(world):
     w = world
     w.step(500)  # 1 s more after the reset's own settling.
-    assert np.abs(w.data.qvel).max() < 2.0, "something is still flying around"
+    speed = max(np.linalg.norm(w.data.qvel[a : a + 6]) for a in w._desk.dof_adr)
+    assert speed < 0.1, f"the desk is not at rest: an item still moves at {speed:.2f}"
     for p, pos in zip(w._desk.placements, _item_positions(w).values()):
         if p.active:
             assert -0.01 < pos[2] < 0.12, (p.name, pos)  # on the table, or in a cup
             assert math.hypot(*pos[:2]) < 0.5, (p.name, pos)
         else:
             assert pos[2] < L.FLOOR_Z + 0.1, (p.name, pos)  # still parked under the table
+
+
+@pytest.mark.parametrize("seed", [2, 7, 11])
+def test_every_desk_comes_to_rest(seed):
+    w = SimWorld("desk_sort", seed=seed)
+    w.step(500)
+    speed = max(np.linalg.norm(w.data.qvel[a : a + 6]) for a in w._desk.dof_adr)
+    assert speed < 0.1, f"seed {seed}: an item still moves at {speed:.2f}"
+
+
+def test_items_carry_their_mass_at_their_centre(world):
+    for it in world._desk.pool:
+        b = mujoco.mj_name2id(world.model, mujoco.mjtObj.mjOBJ_BODY, f"desk_{it.name}")
+        assert np.allclose(world.model.body_ipos[b], 0.0), it.name
 
 
 def test_each_reset_is_a_new_desk(world):

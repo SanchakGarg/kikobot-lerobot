@@ -50,7 +50,7 @@ STATS_EVERY_S = 10.0
 
 # desk_sort: physics with the arm held at ready after each new desk, so
 # stacked pens drop and come to rest before the episode starts.
-SETTLE_S = 0.6
+SETTLE_S = 1.0
 # Objects respawn in a fan in front of the arm, within comfortable reach.
 SPAWN_RADIUS_M = (0.22, 0.32)
 SPAWN_HALF_ANGLE_RAD = math.radians(40.0)

@@ -98,8 +98,11 @@ def _colliders(body, item: L.PoolItem) -> None:
     """Primitive colliders fitted to the item, the same shapes as the Isaac scene's."""
     hx, hy, hz = item.half
     spec = item.spec
-    common = dict(group=HIDDEN_GROUP, rgba=[0, 0, 0, 0], friction=[spec.friction, 0.01, 0.001], condim=4)
     shape = spec.collider
+    # Round items (pens, markers, glue sticks) need rolling friction (condim 6),
+    # or a pen nudged once rolls on for ever.
+    condim = 6 if shape in ("capsule", "cylinder_x") else 4
+    common = dict(group=HIDDEN_GROUP, rgba=[0, 0, 0, 0], friction=[spec.friction, 0.01, 0.01], condim=condim)
     if item.kind == "scissors":
         sx, sy, sz = hx / 0.070, hy / 0.022, hz / 0.004
         body.add_geom(name=f"{body.name}_blades", type=mujoco.mjtGeom.mjGEOM_BOX,
@@ -139,6 +142,10 @@ def add_desk(spec: mujoco.MjSpec, pool: list[L.PoolItem] | None = None, textures
         hx, hy, hz = item.half
         m = item.spec.mass
         body.explicitinertial = True
+        # Centre of mass at the item's centre. Left unset, MjSpec puts it at the
+        # body's position in the world: a metre off, and the item flails.
+        body.ipos = [0.0, 0.0, 0.0]
+        body.iquat = [1.0, 0.0, 0.0, 0.0]
         body.mass = m
         body.inertia = [m / 3 * (hy**2 + hz**2), m / 3 * (hx**2 + hz**2), m / 3 * (hx**2 + hy**2)]
         body_mat = spec.add_material(name=f"desk_{item.name}_body", rgba=[0.8, 0.8, 0.8, 1.0])

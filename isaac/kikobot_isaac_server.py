@@ -57,7 +57,7 @@ MIN_OBJECT_PAD_GAP_M = 0.12
 SCENES = ("empty", "pick_place", "cylinder", "desk_sort")
 # desk_sort: physics run with the arm held at ready after each respawn, so
 # stacked pens drop and come to rest before the episode starts.
-SETTLE_S = 0.6
+SETTLE_S = 1.0
 
 log = logging.getLogger("kikobot_isaac")
 

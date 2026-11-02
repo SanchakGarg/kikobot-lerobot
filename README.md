@@ -347,12 +347,13 @@ Physics runs in real time from the moment the server starts. A client's
 servos do with the same goal. The log prints the real-time factor every 10 s.
 
 **The lab.** Every scene puts the arm on a grey lab table in a makerspace:
-grey epoxy floor, a window with daylight, six LED ceiling panels, a
+grey epoxy floor, a window with daylight, six LED ceiling panels and a
+task light over the table, a
 workbench with a pegboard of tools and a 3D printer behind the arm,
 shelving with storage bins, a whiteboard and a stool. The room is described
 once, in `lerobot_robot_kikobot/env/room.py`, and the Isaac Sim server builds
 the same room from that file. **The lighting changes on every reset**:
-dimmer level, colour temperature (3800–6500 K), panels switched off, and
+dimmer level, colour temperature (4300–6500 K), panels switched off, and
 the sun on or off at a random angle, so that recorded datasets cover a range
 of lighting. `--fixed-lighting` disables this.
 
@@ -360,7 +361,7 @@ of lighting. `--fixed-lighting` disables this.
 |---|---|
 | `pick_place` | A red 32 mm cube and a green place pad, respawned each reset |
 | `cylinder` | An orange cylinder lying on its side, and the pad |
-| `desk_sort` | A stationery sorting station: a pen cup, a marker cup, a tape peg, trays and a note mat around the arm, and 32 pens, pencils, markers, highlighters, tapes, glue sticks, erasers, sticky notes, scissors, a stapler, a ruler, ... of which a random selection (14 on average) lies in front of it, each with a random colour and texture, pens sometimes piled up ([details](docs/isaac-sim-teleop.md#desk-sorting-station)) |
+| `desk_sort` | A stationery sorting station: a pen cup, a marker cup, a tape peg, trays and a note mat around the arm, and 32 pens, pencils, markers, highlighters, tapes, glue sticks, erasers, sticky notes, scissors, a stapler, a ruler, ... of which a random 5–11 (8 on average) lie in front of it, each with a random colour and texture, pens sometimes piled up ([details](docs/isaac-sim-teleop.md#desk-sorting-station)) |
 | `empty` | Nothing |
 
 Drive it from a second terminal:

@@ -111,12 +111,12 @@ Every scene puts the arm on a grey lab table in a makerspace, the same room
 as the MuJoCo server's, built from the same description
 (`lerobot_robot_kikobot/env/room.py`) by `isaac/room_usd.py`: grey epoxy
 floor, off-white walls, a strip window with daylight, six LED ceiling panels
-(RectLights), a workbench with a pegboard of tools and a 3D printer behind
+and a task light over the table (RectLights), a workbench with a pegboard of tools and a 3D printer behind
 the arm, steel shelving with storage bins, a whiteboard and a stool. A faint
 dome light stands in for the light bouncing around a real room.
 
 On every reset the light changes: the panels' dimmer level and colour
-temperature (3800–6500 K, all panels alike), some panels switched off, the
+temperature (4300–6500 K, all panels alike), some panels switched off, the
 sun on or off, and its angle through the window. `--fixed-lighting` turns
 that off. RTX exposure differs between machines; if the images look too
 dark or washed out, start the server with `--light-scale 0.5` or `2`.
@@ -156,14 +156,14 @@ proper place for every kind of item:
 In front of the arm lies the clutter, drawn from a pool of 32 items (8 pens,
 4 pencils, 4 markers, 3 highlighters, 2 each of tape rolls, glue sticks,
 erasers and sticky-note pads, and a pair of scissors, a stapler, a ruler, a
-paper clip box and a sharpener): on average 9 writing tools and 5 other
-supplies, each with a random colour, texture (stripes, bands, grip dots,
+paper clip box and a sharpener): 3 to 7 writing tools and 2 to 4 other
+supplies per desk, each with a random colour, texture (stripes, bands, grip dots,
 printed label, polka dots, ...) and finish, on the grey table.
 
 Every reset (and the gamepad's Back button) draws a new desk. **Pens can
-land on top of each other**: about a third of the writing tools are dropped
+land on top of each other**: about a fifth of the writing tools are dropped
 across ones already on the desk (up to three layers), then the server runs
-0.6 s of physics with the arm held still so the piles settle before the
+1 s of physics with the arm held still so the piles settle before the
 episode starts (`--settle-s` on the server). The same `--seed` gives
 the same sequence of desks.
 
@@ -193,7 +193,7 @@ that kind is built procedurally. Server options:
 | `--desk-assets` | `auto` | `auto`: use the JSON where it has a match. `nucleus`: require the JSON. `procedural`: ignore it |
 | `--desk-assets-json` | `models/desk_assets.json` | Another catalog |
 | `--keep-asset-materials` | off | Keep an asset's own look instead of the random colours and textures |
-| `--settle-s` | 0.6 | Physics time after each reset for dropped items to come to rest |
+| `--settle-s` | 1.0 | Physics time after each reset for dropped items to come to rest |
 
 Assets are only used for their looks. Each one is turned so its longest
 side lies along the desk, scaled to the real size of that kind, and given a

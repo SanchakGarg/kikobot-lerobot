@@ -26,14 +26,18 @@ TEXTURE_SIZE = 256
 
 # Relative light intensity (room.py) to MuJoCo's light colours. MuJoCo adds
 # lights linearly and clips, so six panels plus the sun stay well under 1.
-PANEL_DIFFUSE = 0.2
+PANEL_DIFFUSE = 0.22
+# Each light also lifts the shadows a little, as light bouncing off the walls would.
+PANEL_AMBIENT = 0.035
 PANEL_SPECULAR = 0.05
 SUN_DIFFUSE = 0.45
 SUN_SPECULAR = 0.15
 PANEL_CUTOFF_DEG = 80.0
 # A shadow map spans the light's whole cone: the shadow-casting panel gets a
 # narrower one (it still covers the table), or its shadows come out jagged.
-SHADOW_PANEL_CUTOFF_DEG = 45.0
+SHADOW_PANEL_CUTOFF_DEG = 35.0
+# Soft shadow edges: the panel is a lamp this big, not a point.
+SHADOW_BULB_RADIUS_M = 0.12
 
 
 def _light_name(name: str) -> str:
@@ -101,9 +105,12 @@ def _add_lights(spec: mujoco.MjSpec, room: RoomSpec) -> None:
         else:
             light.type = mujoco.mjtLightType.mjLIGHT_SPOT
             light.cutoff = SHADOW_PANEL_CUTOFF_DEG if l.castshadow else PANEL_CUTOFF_DEG
-            light.exponent = 2.0
+            if l.castshadow:
+                light.bulbradius = SHADOW_BULB_RADIUS_M
+            light.exponent = 1.0
             light.diffuse = [PANEL_DIFFUSE * l.intensity] * 3
             light.specular = [PANEL_SPECULAR * l.intensity] * 3
+            light.ambient = [PANEL_AMBIENT * l.intensity] * 3
 
 
 def _add_cameras(spec: mujoco.MjSpec, room: RoomSpec) -> None:
@@ -117,8 +124,8 @@ def _add_cameras(spec: mujoco.MjSpec, room: RoomSpec) -> None:
 def _visual(spec: mujoco.MjSpec) -> None:
     v = spec.visual
     # The room lights the scene; the headlight only lifts the deepest shadows.
-    v.headlight.diffuse = [0.12, 0.12, 0.12]
-    v.headlight.ambient = [0.15, 0.15, 0.15]
+    v.headlight.diffuse = [0.06, 0.06, 0.06]
+    v.headlight.ambient = [0.10, 0.10, 0.10]
     v.headlight.specular = [0.0, 0.0, 0.0]
     v.quality.shadowsize = 4096
     v.quality.offsamples = 8
@@ -225,6 +232,8 @@ class RoomLights:
             m.light_active[i] = s.on
             m.light_diffuse[i] = rgb * (SUN_DIFFUSE if sun else PANEL_DIFFUSE)
             m.light_specular[i] = rgb * (SUN_SPECULAR if sun else PANEL_SPECULAR)
+            if not sun:
+                m.light_ambient[i] = rgb * PANEL_AMBIENT
             if sun:
                 d = np.asarray(s.dir, dtype=float)
                 m.light_dir[i] = d / np.linalg.norm(d)
