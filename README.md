@@ -372,7 +372,9 @@ and lower it to rest before the last Enter.
    - **joint names**: redo only those, e.g. `J3`, `gripper` or `J2 gripper`.
      The other joints keep their saved calibration;
    - **`home`**: only set the [home pose](#home-pose);
-   - **`check`**: only [check the directions](#check-directions).
+   - **`check`**: only [check the directions](#check-directions);
+   - **`flip J3`** (or `flip J3 J4`): reverse those joints' direction
+     without moving them ([flip a joint](#flip-joint)).
    A joint missing from the file (e.g. the gripper, if you calibrated before
    it was added) is listed as "not calibrated yet".
 2. For each joint, J1 to J6 and the gripper (bus ID 7,
@@ -425,7 +427,13 @@ the arm's joint angles as the sim would show them, each time you press
 Enter, next to the sim's ready pose. Bend the real arm by hand into the
 ready pose you see in the sim and compare: every joint should have the
 same sign and roughly the same value. A joint whose sign is opposite was
-calibrated the wrong way round: run calibrate again and type just its name.
+calibrated the wrong way round: [flip it](#flip-joint).
+
+<a id="flip-joint"></a>**Flip a joint.** Run calibrate and type `flip J3`
+(several at once: `flip J3 J4`; the gripper too). The saved min and max
+trade places, so the joint turns the other way; nothing moves and nothing
+else is asked. Then `check` again. Flip the home pose's joints too, by
+setting it again with `home`: its angles were read with the old direction.
 
 `lerobot-teleoperate` and `lerobot-record` load that file automatically when
 given the same `--robot.id` (here `kikobot`); the log says
@@ -480,7 +488,8 @@ it, pass the full list: `--robot.inverted_joints='[J5,J3]'`, or
 `--robot.inverted_joints='[]'` for none. It only applies without a
 calibration: [calibration](#calibration) measures each joint's direction,
 so a calibrated joint ignores this list. If a calibrated joint turns the
-wrong way, its min and max were swapped: calibrate again.
+wrong way, its min and max were swapped: calibrate and type `flip <joint>`
+([flip a joint](#flip-joint)).
 
 Follower options (`--robot.<name>=`):
 
@@ -589,9 +598,9 @@ all three with Python 3.11+.
 | `No gamepad found` | Plug the controller in, then restart (it is only detected at startup). The log lists every joystick GLFW sees; on Ubuntu, if none appear, run `sudo usermod -aG input $USER` and log in again. Xbox pads unknown to GLFW get the xpad layout automatically. |
 | Wrong device used as the gamepad | Pick its slot from the `Joystick slot N` log lines: `--teleop.joystick=N`. |
 | `Settings schema 'org.gnome.settings-daemon.plugins.xsettings' does not contain a key named 'antialiasing'` (Ubuntu) | Launched from a Snap app's terminal (e.g. Snap VS Code). Run from a normal terminal, or install VS Code from the `.deb`. |
-| Gamepad moves come out in the wrong directions (e.g. X/Y moves the arm up and down) | One or more joints are calibrated the wrong way round. Run calibrate, type `check`, and compare with the sim's ready pose ([check the directions](#check-directions)); redo each joint with the wrong sign by name. |
+| Gamepad moves come out in the wrong directions (e.g. X/Y moves the arm up and down) | One or more joints are calibrated the wrong way round. Run calibrate, type `check`, and compare with the sim's ready pose ([check the directions](#check-directions)); `flip` each joint with the wrong sign. |
 | `Sender has been blocked for over 5 seconds waiting for space in channel` and teleop freezes | Fixed: the rerun view now sends JPEG frames at 15 Hz from its own thread and drops frames when the viewer lags. Update (`git pull`). `--robot.display=none` turns the view off. |
-| A joint moves the wrong way (opposite to the sim) | Compare the real arm with the rerun view (a joint's measured line moves opposite to its commanded line). Calibrated: redo [calibration](#calibration), with min and max at the ends the model shows. Uncalibrated: list it in `--robot.inverted_joints` (default `[J5]`), e.g. `'[J5,J3]'` ([6](#joint-direction)). |
+| A joint moves the wrong way (opposite to the sim) | Compare the real arm with the rerun view (a joint's measured line moves opposite to its commanded line). Calibrated: calibrate and type `flip <joint>` ([flip a joint](#flip-joint)). Uncalibrated: list it in `--robot.inverted_joints` (default `[J5]`), e.g. `'[J5,J3]'` ([6](#joint-direction)). |
 | Real arm stops short of, or overshoots, the sim's pose | Redo [calibration](#calibration) with each joint pushed fully to the ends the model shows. |
 | Arm wobbles after stopping | Measure and set `shaper_freq_hz` ([7](#7-tune-the-motion-input-shaping)), or lower `max_acceleration_deg_s2`. |
 | Arm feels sluggish | Raise `max_velocity_deg_s` / `max_acceleration_deg_s2`, or use `shaper_type=zv`. |

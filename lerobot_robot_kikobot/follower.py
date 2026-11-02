@@ -178,11 +178,16 @@ class KikobotFollower(Robot):
                 "  J3, J2 gripper redo only those joints\n"
                 "  home           only set the home pose\n"
                 "  check          print the arm's angles as you pose it, to compare with the sim\n"
+                "  flip J3 J4     reverse those joints' direction, without moving them\n"
                 "> "
             ).replace(",", " ").split()
             words = [a.lower() for a in answer]
             if not words:
                 return [], ""
+            if words[0] == "flip":
+                if self._flip([w for w in answer[1:]]):
+                    return [], ""
+                continue
             if words in (["all"], ["c"]):
                 return motors, ""
             if words in (["home"], ["check"]):
@@ -192,6 +197,25 @@ class KikobotFollower(Robot):
             if not unknown:
                 return [names[w] for w in words], ""
             print(f"Unknown joint(s) {unknown}.")
+
+    def _flip(self, joints: list[str]) -> bool:
+        """Swap which measured end is min for calibrated joints; saves the file."""
+        names = {m.lower(): m for m in self.calibration}
+        bad = [j for j in joints if j.lower() not in names]
+        if not joints or bad:
+            print(f"Name calibrated joints to flip, e.g. 'flip J3'. Not calibrated: {bad}")
+            return False
+        for j in joints:
+            motor = names[j.lower()]
+            c = self.calibration[motor]
+            c.drive_mode = 1 - c.drive_mode
+            if is_range_calibrated(c.range_min, c.range_max):
+                # Mirror the zero inside the measured range, so the ends trade places.
+                c.homing_offset = c.range_min + c.range_max - c.homing_offset
+            print(f"  {motor} flipped.")
+        self._save_calibration()
+        print(f"Saved to {self.calibration_fpath}")
+        return True
 
     def _check(self, bus: FeetechBus) -> None:
         """Print the arm's joint angles, as the sim would show them, until 'q'."""
