@@ -4,10 +4,11 @@ The loop is: record gamepad demonstrations in Isaac Sim, train a policy on
 them (on the laptop or [on the cluster](slurm-training.md)), then run the
 policy back in Isaac Sim and, if it works, on the real arm.
 
-Set the folders as in [teleop](isaac-sim-teleop.md), in each new terminal:
+Open each terminal inside `kikobot-lerobot` and set the folders as in
+[teleop](isaac-sim-teleop.md):
 
 ```powershell
-$W = "$HOME\kikobot"; $I = "$W\isaacsim-env\Scripts"; $V = "$W\lerobot\.venv\Scripts"
+$W = Split-Path $PWD; $I = "$W\isaacsim-env\Scripts"; $V = "$W\lerobot\.venv\Scripts"
 ```
 
 Start the server first, and leave it running for all of the below:

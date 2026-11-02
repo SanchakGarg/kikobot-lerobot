@@ -8,7 +8,7 @@
 | `ModuleNotFoundError: isaacsim` | You started the server with LeRobot's Python. Use `"$W\isaacsim-env\Scripts\python.exe"` (`$I` in the guides). |
 | `invalid choice: 'kikobot_isaac'` in a LeRobot command | The plugin in LeRobot's venv is older than this guide. `git pull`, then `pip install -e .` into LeRobot's venv. |
 | `Server speaks protocol N, this plugin M` | The two sides are from different commits. `git pull` on both machines. |
-| Isaac Sim install fails with a path error on Windows | Enable long paths ([setup §2](isaac-sim-setup.md#2-isaac-sim-6-with-newton)), or use a short parent folder such as `$W = "C:\kikobot"` and create `isaacsim-env` there again. |
+| Isaac Sim install fails with a path error on Windows | Enable long paths ([setup §2](isaac-sim-setup.md#2-isaac-sim-6-with-newton)), or move `lerobot`, `kikobot-lerobot` and `isaacsim-env` into a short folder such as `C:\kb` (recreating the venvs there). |
 | `Isaac Sim could not switch to the Newton engine` | The Newton extensions did not load: reinstall with `isaacsim[all,extscache]`. The log lists the engines that are available. |
 | `Joints [...] are not in the articulation` | The USD is stale or failed to import. Run `convert_mjcf.py` again and read its log. The server log lists the dofs it found. |
 | The arm falls limp or flies apart at start | **USD variant:** the imported USD's physics variant does not suit Newton. The log shows `Physics variants [...]`; try another with `--physics-variant` (e.g. `physics`, `mujoco`). **Reversed joints:** Newton also refuses those ("Reversed joints are not supported"). Re-convert after updating Isaac Sim. |

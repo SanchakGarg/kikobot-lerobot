@@ -20,17 +20,16 @@ newer.
 module avail python 2>&1 | grep -i 3.12        # e.g. module load python/3.12
 # or: curl -LsSf https://astral.sh/uv/install.sh | sh && uv python install 3.12
 
-W=~/kikobot                       # the parent folder on the cluster
-mkdir -p $W
-git clone https://github.com/huggingface/lerobot.git $W/lerobot
-cd $W/lerobot
+# Run in the folder that should hold LeRobot and this repo side by side.
+git clone https://github.com/huggingface/lerobot.git
+cd lerobot
 python3.12 -m venv .venv          # uv: uv venv --python 3.12 .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 .venv/bin/pip install -e ".[training]"
 
 # The training scripts and this repo's sbatch file.
-git clone https://github.com/SanchakGarg/kikobot-lerobot.git $W/kikobot-lerobot
+git clone https://github.com/SanchakGarg/kikobot-lerobot.git ../kikobot-lerobot
 ```
 
 The plugin itself is not needed to train, so there is no `pip install` of
@@ -41,11 +40,12 @@ training fails with an FFmpeg or `libavutil` error, `module load ffmpeg`, or
 install it into the venv's prefix with conda
 (`conda install -c conda-forge "ffmpeg<8"`).
 
-**Check the GPU stack on a GPU node,** with a short interactive job:
+**Check the GPU stack on a GPU node,** with a short interactive job, from
+inside `lerobot`:
 
 ```bash
 srun --gres=gpu:1 --partition=gpu --time=00:10:00 --pty \
-  ~/kikobot/lerobot/.venv/bin/python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(), torch.cuda.get_arch_list())"
+  .venv/bin/python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(), torch.cuda.get_arch_list())"
 ```
 
 `sm_100` must be in the list. If it is not, reinstall torch from the
@@ -57,25 +57,25 @@ srun --gres=gpu:1 --partition=gpu --time=00:10:00 --pty \
 `scp` built in:
 
 ```powershell
-$W = "$HOME\kikobot"
-cd $W\kikobot-lerobot
-scp -r datasets\kikobot_isaac user@cluster:~/kikobot/kikobot-lerobot/datasets/
+# inside kikobot-lerobot on the laptop
+scp -r datasets\kikobot_isaac user@cluster:CLUSTER_REPO/datasets/
 ```
 
-For later updates, `rsync -av` from WSL or Git Bash only sends what changed.
+`CLUSTER_REPO` is the path of `kikobot-lerobot` on the cluster (run `pwd`
+inside it there). For later updates, `rsync -av` from WSL or Git Bash only sends what changed.
 
 **Option B, via the Hugging Face Hub.** This is handy across several
 machines. The dataset stays private.
 
 ```powershell
-$W = "$HOME\kikobot"
+$W = Split-Path $PWD              # inside kikobot-lerobot
 & "$W\lerobot\.venv\Scripts\hf.exe" auth login
 & "$W\lerobot\.venv\Scripts\hf.exe" upload YOUR_HF_USER/kikobot_isaac `
   datasets\kikobot_isaac --repo-type dataset --private
 ```
 
 Then on the cluster, set `REPO_ID=YOUR_HF_USER/kikobot_isaac` (below) and
-log in once with `~/kikobot/lerobot/.venv/bin/hf auth login`. The data downloads when
+log in once with `../lerobot/.venv/bin/hf auth login` from inside the repo. The data downloads when
 the job starts.
 
 ## 3. Submit the training job
@@ -85,7 +85,7 @@ lines for your cluster: the partition name, an account if your cluster
 needs one, and the time limit. Then:
 
 ```bash
-cd ~/kikobot/kikobot-lerobot
+cd CLUSTER_REPO                    # kikobot-lerobot on the cluster
 sbatch scripts/slurm/train.sbatch
 ```
 
@@ -111,7 +111,7 @@ DATASET=kikobot_isaac_cylinder REPO_ID=you/kikobot_isaac_cylinder \
 | `OUTPUT_DIR` | `outputs/train/<policy>_<dataset>` | Where checkpoints go |
 | `WANDB` | false | Log to Weights & Biases (run `wandb login` once on the login node) |
 | `RESUME` | empty | An earlier `OUTPUT_DIR` to continue from |
-| `LEROBOT_DIR` | `lerobot` next to this repo (`~/kikobot/lerobot`) | LeRobot checkout with `.venv` |
+| `LEROBOT_DIR` | `../lerobot`, next to this repo | LeRobot checkout with `.venv` |
 
 **Watch the job:**
 
@@ -137,10 +137,9 @@ Only the final `pretrained_model` folder is needed, about 200 MB for ACT. In
 PowerShell on the laptop:
 
 ```powershell
-$W = "$HOME\kikobot"
-cd $W\kikobot-lerobot
+# inside kikobot-lerobot on the laptop
 mkdir outputs\train\act_kikobot_isaac -Force
-scp -r user@cluster:~/kikobot/kikobot-lerobot/outputs/train/act_kikobot_isaac/checkpoints/last/pretrained_model `
+scp -r user@cluster:CLUSTER_REPO/outputs/train/act_kikobot_isaac/checkpoints/last/pretrained_model `
   outputs\train\act_kikobot_isaac\
 ```
 

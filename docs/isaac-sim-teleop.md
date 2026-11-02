@@ -1,16 +1,17 @@
 # Teleop in Isaac Sim
 
-Do [setup](isaac-sim-setup.md) first. Everything lives in one parent folder,
-`$W`, as set up there. Set these in each new terminal:
+Do [setup](isaac-sim-setup.md) first. Everything lives in the repo's parent
+folder, `$W`, as set up there. Open each terminal inside `kikobot-lerobot`
+and set:
 
 ```powershell
-$W = "$HOME\kikobot"                    # your parent folder
+$W = Split-Path $PWD                    # run inside kikobot-lerobot: its parent
 $I = "$W\isaacsim-env\Scripts"          # Isaac Sim's Python
 $V = "$W\lerobot\.venv\Scripts"         # LeRobot's tools
 ```
 
 ```bash
-W=~/kikobot; I=$W/isaacsim-env/bin; V=$W/lerobot/.venv/bin   # Ubuntu
+W=$(dirname "$PWD"); I=$W/isaacsim-env/bin; V=$W/lerobot/.venv/bin   # Ubuntu
 ```
 
 Commands are shown for Windows. On Ubuntu, change `` ` `` line endings to

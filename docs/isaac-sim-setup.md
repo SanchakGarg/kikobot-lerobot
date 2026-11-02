@@ -10,25 +10,25 @@ You will end up with two Python environments on the GPU machine:
 Both use **Python 3.12**. Keep them separate: Isaac Sim pins its own
 versions of many packages.
 
-Everything goes in **one parent folder**, not straight into your home
-folder: LeRobot, this repo and Isaac Sim side by side.
+Everything goes in the **parent folder of this repo**: the folder that
+holds `kikobot-lerobot`, wherever that is. LeRobot and Isaac Sim sit next to
+the repo:
 
 ```
-kikobot\                     the parent folder ($W), e.g. C:\Users\you\kikobot
+..\                          the repo's parent folder ($W)
 ├── lerobot\                 LeRobot, with its .venv (step 1)
-├── kikobot-lerobot\         this repo (step 1)
+├── kikobot-lerobot\         this repo (step 1); open terminals here
 └── isaacsim-env\            Isaac Sim 6 (step 2)
 ```
 
-Every command in these docs starts from `$W`. Set it in each new terminal,
-pointing at your parent folder:
+Open every terminal **inside `kikobot-lerobot`** and set `$W` to its parent:
 
 ```powershell
-$W = "$HOME\kikobot"          # Windows (PowerShell)
+$W = Split-Path $PWD          # Windows (PowerShell)
 ```
 
 ```bash
-W=~/kikobot                   # Ubuntu
+W=$(dirname "$PWD")           # Ubuntu
 ```
 
 ## Requirements
@@ -48,40 +48,29 @@ W=~/kikobot                   # Ubuntu
 
 ## 1. LeRobot and this plugin
 
-On Windows (PowerShell):
+If you followed the main README's quick start, this is done: it cloned
+`lerobot` and `kikobot-lerobot` into the same folder. Otherwise, open a
+terminal in the folder that should hold everything.
+
+**Windows (PowerShell):**
 
 ```powershell
-mkdir $W -Force
-git clone https://github.com/huggingface/lerobot.git $W\lerobot
-cd $W\lerobot
-py -3.12 -m venv .venv
-.venv\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-.venv\Scripts\pip install -e ".[core_scripts,training,feetech]"
+git clone https://github.com/huggingface/lerobot.git
+git clone https://github.com/SanchakGarg/kikobot-lerobot.git
+cd kikobot-lerobot
+$W = Split-Path $PWD
 
-git clone https://github.com/SanchakGarg/kikobot-lerobot.git $W\kikobot-lerobot
-cd $W\kikobot-lerobot
+py -3.12 -m venv $W\lerobot\.venv
+& "$W\lerobot\.venv\Scripts\pip.exe" install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+& "$W\lerobot\.venv\Scripts\pip.exe" install -e "$W\lerobot[core_scripts,training,feetech]"
 & "$W\lerobot\.venv\Scripts\pip.exe" install -e .
 ```
 
-Already installed somewhere else, e.g. in your home folder from the main
-README's quick start? Move both folders into `$W` and recreate LeRobot's
-venv, because a venv breaks when it is moved:
+Already installed? Update and reinstall the plugin so it picks up `pyzmq`,
+from inside the repo:
 
 ```powershell
-mkdir $W -Force
-Move-Item $HOME\lerobot, $HOME\kikobot-lerobot $W
-cd $W\lerobot
-Remove-Item -Recurse -Force .venv
-py -3.12 -m venv .venv
-.venv\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-.venv\Scripts\pip install -e ".[core_scripts,training,feetech]"
-& "$W\lerobot\.venv\Scripts\pip.exe" install -e $W\kikobot-lerobot
-```
-
-Already in `$W`? Update and reinstall the plugin so it picks up `pyzmq`:
-
-```powershell
-cd $W\kikobot-lerobot
+$W = Split-Path $PWD
 git pull
 & "$W\lerobot\.venv\Scripts\pip.exe" install -e .
 ```
@@ -89,15 +78,18 @@ git pull
 **Ubuntu:**
 
 ```bash
-mkdir -p $W
-git clone https://github.com/huggingface/lerobot.git $W/lerobot
-cd $W/lerobot
-python3.12 -m venv .venv
-.venv/bin/pip install -e ".[core_scripts,training,feetech]"
+git clone https://github.com/huggingface/lerobot.git
+git clone https://github.com/SanchakGarg/kikobot-lerobot.git
+cd kikobot-lerobot
+W=$(dirname "$PWD")
 
-git clone https://github.com/SanchakGarg/kikobot-lerobot.git $W/kikobot-lerobot
-$W/lerobot/.venv/bin/pip install -e $W/kikobot-lerobot
+python3.12 -m venv $W/lerobot/.venv
+$W/lerobot/.venv/bin/pip install -e "$W/lerobot[core_scripts,training,feetech]"
+$W/lerobot/.venv/bin/pip install -e .
 ```
+
+If LeRobot lives somewhere else, point `$V` (in the other guides) at its
+`.venv` instead.
 
 ## 2. Isaac Sim 6 (with Newton)
 
@@ -214,8 +206,8 @@ example a Mac (where Isaac Sim cannot run) driving a Linux RTX workstation.
 On the Isaac machine:
 
 ```bash
-W=~/kikobot
-cd $W/kikobot-lerobot
+cd kikobot-lerobot                # wherever it is on that machine
+W=$(dirname "$PWD")
 $W/isaacsim-env/bin/python isaac/kikobot_isaac_server.py --headless --livestream
 ```
 
