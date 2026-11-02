@@ -132,6 +132,10 @@ class KikobotGamepadConfig(TeleoperatorConfig):
     # Stick input is low-passed with this time constant, so a flick of the
     # stick ramps the velocity up and down instead of stepping it.
     input_smoothing_s: float = 0.12
+    # Easing off the stick, the speed falls at this rate instead (full speed
+    # per second): a small move stops almost where it is let go, a fast one
+    # gets the braking distance the arm needs to stop without overshooting.
+    stop_rate_per_s: float = 4.0
     # Fraction of full speed while precision mode (X) is on.
     precision_scale: float = 0.3
     # Work volume of the gripper centre, in metres from the base.

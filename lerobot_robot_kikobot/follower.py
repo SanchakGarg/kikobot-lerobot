@@ -165,6 +165,21 @@ class KikobotFollower(Robot):
             q.append((raw[servo_id] - c.homing_offset) / self._steps_per_rad(i, motor, c))
         return np.array(q)
 
+    def _reachable(self) -> tuple[np.ndarray, np.ndarray]:
+        """Joint limits: the model's, narrowed to the measured ends of calibrated joints.
+
+        After a joint is re-zeroed its measured ends no longer sit exactly on
+        the model's limits; this keeps it off its hard stop.
+        """
+        lower, upper = self.lower.copy(), self.upper.copy()
+        for i, motor in enumerate(self.motor_ids):
+            c = self.calibration.get(motor)
+            if c is None or not is_range_calibrated(c.range_min, c.range_max):
+                continue
+            ends = sorted((r - c.homing_offset) / self._steps_per_rad(i, motor, c) for r in (c.range_min, c.range_max))
+            lower[i], upper[i] = max(lower[i], ends[0]), min(upper[i], ends[1])
+        return lower, upper
+
     @property
     def is_calibrated(self) -> bool:
         # Uncalibrated still runs, on the mid-scale default above.
@@ -213,6 +228,7 @@ class KikobotFollower(Robot):
                 "  home           only set the home pose\n"
                 "  check          print the arm's angles as you pose it, to compare with the sim\n"
                 "  flip J3 J4     reverse those joints' direction, without moving them\n"
+                "  zero J5        re-zero a joint that sits off the sim by a fixed amount\n"
                 "> "
             ).replace(",", " ").split()
             words = [a.lower() for a in answer]
@@ -221,6 +237,13 @@ class KikobotFollower(Robot):
             if words[0] == "flip":
                 if self._flip([w for w in answer[1:]]):
                     return [], ""
+                continue
+            if words[0] == "zero":
+                names = {m.lower(): m for m in self.calibration if m in ARM_JOINTS}
+                chosen = [names.get(w) for w in words[1:]]
+                if chosen and None not in chosen:
+                    return chosen, "zero"
+                print(f"Name calibrated arm joints to re-zero, e.g. 'zero J5' ({' '.join(names.values())}).")
                 continue
             if words in (["all"], ["c"]):
                 return motors, ""
@@ -298,6 +321,34 @@ class KikobotFollower(Robot):
             except Exception as exc:
                 print(f"  Could not reopen {self.config.port}: {exc}")
 
+    def _zero_joint(self, motor: str) -> None:
+        """Make where the joint is now read 0 deg, keeping its measured scale."""
+        i = list(self.motor_ids).index(motor)
+        servo_id = self.motor_ids[motor]
+        c = self.calibration[motor]
+        self._show()
+        input(
+            f"\n{motor} (limp): set it exactly as in the MuJoCo view, its zero (with every\n"
+            "joint at 0 the arm stands straight up). ENTER: "
+        )
+        raw = self._bus_retry(f"reading {motor}", lambda b: b.read_position(servo_id))
+        shift = (raw - c.homing_offset) / self._steps_per_rad(i, motor, c)
+        c.homing_offset = int(raw)
+        self._save_calibration()
+        print(f"  {motor} re-zeroed: it read {np.rad2deg(shift):+.1f} deg there before. Saved.")
+        self._shift_home(motor, shift)
+
+    def _shift_home(self, motor: str, shift: float) -> None:
+        """Keep the saved home the same physical pose after `motor`'s zero moved by `shift`."""
+        path = home_pose_path(self.id, self.calibration_dir)
+        if not path.is_file():
+            return
+        home = json.loads(path.read_text())
+        if motor in home:
+            home[motor] = round(home[motor] - float(np.rad2deg(shift)), 2)
+            path.write_text(json.dumps(home, indent=4) + "\n")
+            print(f"  Home pose kept the same physical pose: {motor} {home[motor]:+.1f} deg.")
+
     def _check(self) -> None:
         """Print the arm's joint angles, as the sim would show them, until 'q'."""
         ready = np.rad2deg(self.kin.ready_q())
@@ -338,6 +389,9 @@ class KikobotFollower(Robot):
         motors, only = self._calibration_plan()
         if not motors and not only:
             return
+        to_zero = motors if only == "zero" else []
+        if to_zero:
+            motors = []
         if self.streamer is not None:
             self.streamer.stop()
             self.streamer = None
@@ -361,7 +415,10 @@ class KikobotFollower(Robot):
             for motor in motors:
                 self._calibrate_joint(motor)
             # Read with the new calibration, so it is in the model's angles.
-            if only == "check":
+            if to_zero:
+                for motor in to_zero:
+                    self._zero_joint(motor)
+            elif only == "check":
                 self._check()
             elif only == "home" or input("\nSet the home pose now? ENTER for yes, 's' and ENTER to skip: ").strip().lower() != "s":
                 self._release_held("so you can pose it")
@@ -624,7 +681,7 @@ class KikobotFollower(Robot):
             self._last_gripper_pct = float(np.clip(action["gripper.pos"], 0.0, 100.0))
             if self.config.gripper_id is not None:
                 target[6] = self._gripper_angle(self._last_gripper_pct)
-        target = np.clip(target, self.lower, self.upper)
+        target = np.clip(target, *self._reachable())
         self._target = target
         self.streamer.set_target(target)
 

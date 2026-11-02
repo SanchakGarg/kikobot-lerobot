@@ -315,7 +315,9 @@ when it starts.
 
 Teleop options (`--teleop.<name>=`): `linear_speed_m_s` (0.12),
 `angular_speed_deg_s` (90), `gripper_speed_pct_s` (120), `deadzone` (0.12),
-`input_smoothing_s` (0.12), `precision_scale` (0.3), `joystick` (0),
+`input_smoothing_s` (0.12), `stop_rate_per_s` (4: how fast the speed falls
+when you ease off the stick, in full speed per second; higher stops sooner,
+too high overshoots), `precision_scale` (0.3), `joystick` (0),
 `robot_id` (`kikobot`: whose saved [home pose](#home-pose) to use).
 
 ---
@@ -376,7 +378,9 @@ always free, and the ones already done hold the arm up.
    - **`home`**: only set the [home pose](#home-pose);
    - **`check`**: only [check the directions](#check-directions);
    - **`flip J3`** (or `flip J3 J4`): reverse those joints' direction
-     without moving them ([flip a joint](#flip-joint)).
+     without moving them ([flip a joint](#flip-joint));
+   - **`zero J5`**: re-zero a joint that sits off the sim by a fixed
+     amount ([re-zero a joint](#zero-joint)).
    A joint missing from the file (e.g. the gripper, if you calibrated before
    it was added) is listed as "not calibrated yet".
 2. For each joint, J1 to J6 and the gripper (bus ID 7,
@@ -452,6 +456,19 @@ Enter, next to the sim's ready pose. Bend the real arm by hand into the
 ready pose you see in the sim and compare: every joint should have the
 same sign and roughly the same value. A joint whose sign is opposite was
 calibrated the wrong way round: [flip it](#flip-joint).
+
+<a id="zero-joint"></a>**Re-zero a joint.** Calibration puts a joint's 0° exactly
+halfway between the two ends you recorded. If its physical stops are not
+symmetric about the straight position the model has at 0°, the joint sits
+off by a fixed amount everywhere, and redoing its range does not help. Run
+calibrate and type `zero J5` (any arm joint, several at once too). The
+MuJoCo view shows every joint at 0, the arm standing straight up: set that
+joint (limp) exactly like it and press Enter. That spot becomes 0°; the
+scale from its range is kept, and it prints how far off it was. A saved
+home pose is shifted with it so it stays the same physical pose. Commands
+are also clipped to the joint's measured ends, so after re-zeroing it can
+never be driven into its hard stop, at the cost of a few degrees of range
+at one end.
 
 <a id="flip-joint"></a>**Flip a joint.** Run calibrate and type `flip J3`
 (several at once: `flip J3 J4`; the gripper too). The saved min and max
@@ -665,6 +682,8 @@ all three with Python 3.11+.
 | Arm wobbles after stopping | Measure and set `shaper_freq_hz` ([7](#7-tune-the-motion-input-shaping)), or lower `max_acceleration_deg_s2`. |
 | Arm feels sluggish | Raise `max_velocity_deg_s` / `max_acceleration_deg_s2`, or use `shaper_type=zv`. |
 | J2 (or another joint) hangs lower than the sim | Droop under load: corrected for `--robot.sag_joints` (default `[J2]`) while the arm holds still ([sag](#sag)). Add others, e.g. `'[J2,J3]'`. |
+| A joint sits off the sim by the same amount everywhere, even after calibration | Its stops are not symmetric about its zero: calibrate and type `zero <joint>` ([re-zero a joint](#zero-joint)). |
+| A tiny stick nudge makes the arm jump, then creep the rest of the way | Stick-slip in the servo: with a soft position gain, a slowly creeping goal does not move the servo until the gear friction gives, then it jumps, and the soft gain makes the last bit slow. Raise the gain: `--robot.p_coefficient=24` (try 32; lower it again if a joint buzzes). Letting go of the stick now stops the motion at once (`--teleop.stop_rate_per_s`). |
 | Servo buzzes while holding | Lower `--robot.p_coefficient` (try 12). |
 | `Servo stream stopped` | The bus failed repeatedly: check power and cable. The log has the cause. |
 

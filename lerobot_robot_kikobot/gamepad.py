@@ -238,9 +238,16 @@ class KikobotGamepad(Teleoperator):
             self._go_ready()
         self._last_buttons = buttons
 
-        # First-order low-pass: a flicked stick ramps the speed, never steps it.
+        # Speeding up: first-order low-pass, so a flicked stick ramps the
+        # speed, never steps it. Easing off: the speed falls at a fixed rate,
+        # so a small move stops almost where the stick is let go (an
+        # exponential tail would carry it on), and a fast one still gets the
+        # braking distance the arm needs.
         alpha = 1.0 if cfg.input_smoothing_s <= 0 else 1.0 - math.exp(-dt / cfg.input_smoothing_s)
-        self._twist += alpha * (raw - self._twist)
+        easing_off = np.abs(raw) < np.abs(self._twist)
+        gap = raw - self._twist
+        ramp_down = np.sign(gap) * np.minimum(np.abs(gap), cfg.stop_rate_per_s * dt)
+        self._twist += np.where(easing_off, ramp_down, alpha * gap)
         scale = cfg.precision_scale if self._precision else 1.0
         lin = self._twist[:3] * cfg.linear_speed_m_s * scale * dt
         ang = self._twist[3:] * math.radians(cfg.angular_speed_deg_s) * scale * dt

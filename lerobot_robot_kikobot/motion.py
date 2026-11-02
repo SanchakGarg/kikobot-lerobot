@@ -143,7 +143,10 @@ class TrajectoryFollower:
             # extrapolate a stale velocity across it.
             if 1e-3 < dt < 0.25:
                 measured = (target - self.target) / dt
-                self.target_vel = 0.5 * self.target_vel + 0.5 * measured
+                # Smooth a speed-up, but follow a slow-down at once: a stale
+                # higher speed carries the arm past where the target stopped.
+                slowing = np.abs(measured) < np.abs(self.target_vel)
+                self.target_vel = np.where(slowing, measured, 0.5 * self.target_vel + 0.5 * measured)
             else:
                 self.target_vel[:] = 0.0
         self.target = target.copy()
