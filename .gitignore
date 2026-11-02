@@ -18,3 +18,4 @@ MUJOCO_LOG.TXT
 # LeRobot data and training output (large, regenerable)
 datasets/
 outputs/
+models/usd/

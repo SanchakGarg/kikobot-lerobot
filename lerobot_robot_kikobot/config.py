@@ -12,6 +12,8 @@ from lerobot.cameras import CameraConfig
 from lerobot.robots import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
 
+from .motion_config import MotionConfig
+
 ARM_JOINTS = ("J1", "J2", "J3", "J4", "J5", "J6")
 
 
@@ -19,35 +21,6 @@ def default_port() -> str:
     # Feetech's URT-1 / CH343 boards enumerate as ttyACM*; CH340 clones as
     # ttyUSB*. `lerobot-find-port` tells you which one you have.
     return "COM3" if os.name == "nt" else "/dev/ttyACM0"
-
-
-@dataclass
-class MotionConfig:
-    """How a stream of joint targets is turned into servo motion.
-
-    Shared by the sim and the real arm, so the sim moves the way the hardware
-    will. See `motion.py` for what each stage does.
-    """
-
-    # Trajectory follower: the commanded joints never exceed these.
-    max_velocity_deg_s: float = 120.0
-    max_acceleration_deg_s2: float = 600.0
-    # Gain of the final approach (1/s). Higher tracks tighter, lower is softer.
-    tracking_gain: float = 12.0
-    # Extrapolate the incoming target between updates so the follower does
-    # not lag a steadily moving stick by a whole control period.
-    feedforward: bool = True
-    # Input shaper, as in Klipper: none | zv | zvd | mzv | ei.
-    shaper_type: str = "zv"
-    # The arm's dominant ringing frequency. Measure it with
-    # `python scripts/measure_resonance.py`; the default is a typical value
-    # for a servo arm of this size.
-    shaper_freq_hz: float = 6.0
-    shaper_damping: float = 0.1
-    # Velocity limit ramps from this fraction to 1 over `soft_start_s`, so the
-    # first move after connecting (wherever the arm was) is gentle.
-    soft_start_fraction: float = 0.25
-    soft_start_s: float = 3.0
 
 
 @RobotConfig.register_subclass("kikobot_sim")
@@ -64,6 +37,35 @@ class KikobotSimConfig(RobotConfig):
     seed: int | None = None
     # Native MuJoCo window. macOS needs `mjpython` instead of `python`.
     viewer: bool = False
+    motion: MotionConfig = field(default_factory=MotionConfig)
+
+
+@RobotConfig.register_subclass("kikobot_isaac")
+@dataclass
+class KikobotIsaacConfig(RobotConfig):
+    """The arm in NVIDIA Isaac Sim (Newton physics), via `isaac/kikobot_isaac_server.py`.
+
+    The server runs Isaac Sim in its own process; this robot connects to it.
+    Start the server first. See docs/isaac-sim-teleop.md.
+    """
+
+    host: str = "127.0.0.1"
+    port: int = 5556
+    # Seconds to wait for each server reply. The first reply after connecting
+    # can be slow while Isaac Sim compiles shaders; `connect` waits longer.
+    timeout_s: float = 10.0
+    connect_timeout_s: float = 120.0
+    # empty | pick_place | cylinder. The server builds the matching scene.
+    scene: str = "pick_place"
+    fps: int = 30
+    width: int = 640
+    height: int = 480
+    camera_names: tuple[str, ...] = ("record",)
+    seed: int | None = None
+    # raw: exact pixels (use on one machine). jpeg: ~20x smaller (use over a network).
+    image_encoding: str = "raw"
+    # Reset the scene (arm to ready, objects respawned) when connecting.
+    reset_on_connect: bool = True
     motion: MotionConfig = field(default_factory=MotionConfig)
 
 

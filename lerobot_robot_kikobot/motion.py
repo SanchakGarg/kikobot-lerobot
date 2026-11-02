@@ -30,7 +30,10 @@ from collections.abc import Callable
 
 import numpy as np
 
-from .config import MotionConfig
+try:
+    from .motion_config import MotionConfig
+except ImportError:  # Loaded by path from the Isaac Sim server, outside the package.
+    from motion_config import MotionConfig  # type: ignore[no-redef]
 
 SHAPER_TYPES = ("none", "zv", "zvd", "mzv", "ei")
 # Three missed 30 Hz updates.

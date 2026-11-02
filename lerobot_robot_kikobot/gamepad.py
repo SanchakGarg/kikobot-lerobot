@@ -35,6 +35,7 @@ from lerobot.lerobot_types import RobotAction
 from lerobot.teleoperators import Teleoperator
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
+from . import events
 from .config import ARM_JOINTS, KikobotGamepadConfig
 from .kinematics import ArmKinematics, axis_angle_quat, quat_to_mat
 from .paths import home_pose_path, load_home_pose
@@ -213,7 +214,11 @@ class KikobotGamepad(Teleoperator):
             ]
         )
         jaw = float(pressed(glfw.GAMEPAD_BUTTON_B)) - float(pressed(glfw.GAMEPAD_BUTTON_A))
-        buttons = {"x": pressed(glfw.GAMEPAD_BUTTON_X), "y": pressed(glfw.GAMEPAD_BUTTON_Y)}
+        buttons = {
+            "x": pressed(glfw.GAMEPAD_BUTTON_X),
+            "y": pressed(glfw.GAMEPAD_BUTTON_Y),
+            "back": pressed(glfw.GAMEPAD_BUTTON_BACK),
+        }
         return raw, jaw, buttons
 
     def _rising(self, buttons: dict[str, bool], name: str) -> bool:
@@ -236,6 +241,12 @@ class KikobotGamepad(Teleoperator):
             logger.info("Precision mode %s.", "on" if self._precision else "off")
         if self._rising(buttons, "y"):
             self._go_ready()
+        if self._rising(buttons, "back"):
+            # Sim only: respawn the scene (the robot takes the request on its
+            # next send_action) and start again from home.
+            events.request_scene_reset()
+            self._go_ready()
+            logger.info("Scene reset requested.")
         self._last_buttons = buttons
 
         # Speeding up: first-order low-pass, so a flicked stick ramps the

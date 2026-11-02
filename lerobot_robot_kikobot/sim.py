@@ -19,6 +19,7 @@ from lerobot.lerobot_types import RobotAction, RobotObservation
 from lerobot.robots import Robot
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
+from . import events
 from .config import ARM_JOINTS, KikobotSimConfig
 from .kinematics import ArmKinematics
 from .motion import MotionShaper
@@ -177,6 +178,8 @@ class KikobotSim(Robot):
 
     @check_if_not_connected
     def send_action(self, action: RobotAction) -> RobotAction:
+        if events.take_scene_reset():
+            self.reset_scene()
         m, d = self.model, self.data
         for i, j in enumerate(ARM_JOINTS):
             if f"{j}.pos" in action:
