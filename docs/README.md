@@ -9,6 +9,7 @@ guides here add **NVIDIA Isaac Sim with the Newton physics engine** and
 | [Isaac Sim setup](isaac-sim-setup.md) | Install Isaac Sim 6 and LeRobot side by side, convert the arm to USD, check it runs |
 | [Teleop in Isaac Sim](isaac-sim-teleop.md) | Start the sim server, drive the arm with the gamepad, all options |
 | [Record, train, evaluate](isaac-sim-record-and-train.md) | `lerobot-record` in Isaac, inspect and replay datasets, train, run the policy in Isaac and on the real arm |
+| [Scripted demos for OpenVLA](datagen-openvla.md) | `kikobot-datagen`: a scripted expert records perfect desk episodes (Newton + MuJoCo Warp, on SLURM), exported as RLDS for OpenVLA |
 | [Training on SLURM](slurm-training.md) | Move a dataset to the cluster, train on a B200 with `sbatch`, bring the policy back |
 | [Troubleshooting](isaac-sim-troubleshooting.md) | Errors and fixes for the Isaac Sim side |
 

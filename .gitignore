@@ -21,3 +21,7 @@ outputs/
 models/usd/
 models/textures/
 models/desk_assets.json
+
+# Slurm job logs (the folder itself is kept: Slurm writes there before the job starts)
+logs/*
+!logs/.gitkeep

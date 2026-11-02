@@ -26,9 +26,19 @@ dev = ["pytest>=8"]
 # The Newton engine and MuJoCo Warp's ray-traced renderer for kikobot-sim-server
 # (NVIDIA GPU; on a machine without CUDA, Newton falls back to MuJoCo's C solver).
 newton = ["newton[sim,importers]>=1.7", "warp-lang>=1.17", "trimesh"]
+# kikobot-datagen: scripted desk demonstrations, exported as RLDS for OpenVLA.
+# TensorFlow only encodes the dataset, on the CPU.
+openvla = [
+    "tensorflow-cpu>=2.18; sys_platform == 'linux'",
+    "tensorflow>=2.18; sys_platform != 'linux'",
+    "tensorflow-datasets>=4.9",
+    "importlib_resources",
+    "pillow",
+]
 
 [project.scripts]
 kikobot-sim-server = "lerobot_robot_kikobot.sim_server:main"
+kikobot-datagen = "lerobot_robot_kikobot.datagen.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["lerobot_robot_kikobot*"]

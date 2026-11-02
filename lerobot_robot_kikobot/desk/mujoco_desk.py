@@ -182,8 +182,11 @@ class DeskRuntime:
         self.tex = {name: id_of(mujoco.mjtObj.mjOBJ_TEXTURE, f"desk_tex_{name}") for name in T.PATTERNS}
         self.placements: list[L.Placement] = []
 
-    def reset(self, model: mujoco.MjModel, data: mujoco.MjData, rng: np.random.Generator) -> list[L.Placement]:
-        self.placements = L.sample_desk(rng, self.pool)
+    def reset(
+        self, model: mujoco.MjModel, data: mujoco.MjData, rng: np.random.Generator,
+        require: tuple[str, ...] | None = None,
+    ) -> list[L.Placement]:
+        self.placements = L.sample_desk(rng, self.pool, require=require)
         rgb_role = int(mujoco.mjtTextureRole.mjTEXROLE_RGB)
         for k, p in enumerate(self.placements):
             a, d = self.qpos_adr[k], self.dof_adr[k]

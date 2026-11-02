@@ -485,12 +485,16 @@ def sample_desk(
     n_supplies: tuple[int, int] = (2, 4),
     stack_p: float = 0.2,
     tries: int = 200,
+    require: tuple[str, ...] | None = None,
 ) -> list[Placement]:
     """Which items are on the desk this episode, their poses and their looks.
 
     Returns one Placement per pool item, in pool order. Inactive items get a
     parking pose. `stack_p` is the chance that a pen-like item is dropped onto
-    pens already placed instead of onto a clear patch of desk.
+    pens already placed instead of onto a clear patch of desk. `require`:
+    kinds of which at least one item must be on the desk; each is placed
+    first in its group, so it gets a clear patch of desk (later pens may
+    still land on it).
     """
     writing = [i for i, it in enumerate(pool) if it.spec.writing]
     supplies = [i for i, it in enumerate(pool) if not it.spec.writing]
@@ -498,6 +502,22 @@ def sample_desk(
     ns = int(rng.integers(min(n_supplies[0], len(supplies)), min(n_supplies[1], len(supplies)) + 1))
     chosen_w = [int(i) for i in rng.permutation(writing)[:nw]]
     chosen_s = [int(i) for i in rng.permutation(supplies)[:ns]]
+    for kind in require or ():
+        group = chosen_w if KINDS[kind].writing else chosen_s
+        have = [i for i in group if pool[i].kind == kind]
+        if have:
+            pick = have[0]
+            group.remove(pick)
+        else:
+            candidates = [i for i, it in enumerate(pool) if it.kind == kind]
+            if not candidates:
+                raise ValueError(f"The pool has no {kind!r} to require.")
+            pick = int(candidates[int(rng.integers(len(candidates)))])
+            if group:
+                group.pop()  # Keep the item count.
+        group.insert(0, pick)
+    # Nothing is stacked on a required item: it stays free to pick up.
+    keep_clear = {pool[i].name for i in chosen_w[:1] + chosen_s[:1] if pool[i].kind in (require or ())}
 
     placed: list[_Shape] = _station_shapes()
     out: dict[int, Placement] = {}
@@ -540,7 +560,7 @@ def sample_desk(
             else:
                 xy = _sample_xy(rng)
             p0, p1 = _segment(xy, yaw, half_len)
-            shape = _Shape(it.name, p0, p1, radius, 0.0, True, 0)
+            shape = _Shape(it.name, p0, p1, radius, 0.0, it.name not in keep_clear, 0)
             hits = [o for o in placed if shape.gap(o) < CLEARANCE_M]
             if not stack:
                 if hits:

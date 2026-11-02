@@ -169,9 +169,10 @@ class SimWorld:
             self._engine.step(n)
             self._engine.pull(self.model, self.data)
 
-    def reset(self, ready: np.ndarray | None = None) -> None:
+    def reset(self, ready: np.ndarray | None = None, require: tuple[str, ...] | None = None) -> None:
         """Arm to the ready pose, jaws open, object and pad respawned (or a new
-        desk), and new room lighting."""
+        desk), and new room lighting. `require`: desk_sort only, kinds of item
+        that must be on the new desk."""
         mujoco.mj_resetData(self.model, self.data)
         if self._lights is not None:
             self._lights.apply(
@@ -180,7 +181,7 @@ class SimWorld:
         ready = self.ready if ready is None else ready
         if self._desk is not None:
             # A new desk: which items, where, and how they look.
-            self._desk.reset(self.model, self.data, self.rng)
+            self._desk.reset(self.model, self.data, self.rng, require=require)
             self.pose(ready, 100.0)
             self.step(int(round(SETTLE_S / self.model.opt.timestep)))
         else:
@@ -256,7 +257,7 @@ class SimServer:
                 "upper_deg": np.rad2deg(w.upper).tolist(),
                 "ready_deg": np.rad2deg(w.ready).tolist(),
                 "scene": w.scene,
-                "engine": "mujoco",
+                "engine": w.engine_name,
             })
         if cmd in ("command", "pose"):
             q = np.deg2rad(np.asarray(header["q_deg"], dtype=float))

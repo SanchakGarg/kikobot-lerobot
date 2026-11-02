@@ -15,6 +15,11 @@ one of them, so the simulated arm moves with it:
 
 **Isaac Sim, and training on a SLURM cluster:** see [docs/](docs/README.md).
 
+**Scripted demonstrations for OpenVLA:** `kikobot-datagen` records verified,
+perfect episodes of the desk tasks (each kind of item into its station) on
+Newton + MuJoCo Warp, and exports them as RLDS. See
+[docs/datagen-openvla.md](docs/datagen-openvla.md).
+
 The sims and the real arm share one action space (`J1.pos`..`J6.pos` in
 degrees, `gripper.pos` in % open), so a dataset recorded on one, or a policy
 trained on it, runs on the other.
@@ -221,8 +226,11 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 | `lerobot_robot_kikobot/feetech.py` | Sync read/write over the Feetech bus. |
 | `lerobot_robot_kikobot/sim.py`, `isaac.py`, `follower.py`, `gamepad.py` | The four LeRobot devices. |
 | `lerobot_robot_kikobot/desk/` | The desk sorting station, shared by the sims: stations, item pool and sampler, meshes, textures, and its MuJoCo builder. |
+| `lerobot_robot_kikobot/datagen/` | `kikobot-datagen`: the desk tasks, the scripted expert, its perfection checks, the recorder and the RLDS export for OpenVLA. |
 | `isaac/` | Run with Isaac Sim's Python: the Isaac sim server (Newton) and the MJCF → USD converter. |
 | `scripts/slurm/train.sbatch` | Train a policy on a SLURM GPU node. |
+| `scripts/slurm/datagen*.sbatch` | Record scripted desk episodes on the cluster (Newton + MuJoCo Warp) and build their RLDS datasets. |
+| `scripts/openvla/` | The desk datasets in OpenVLA's registry, and a `finetune.py` wrapper. |
 | `docs/` | Isaac Sim setup, teleop, record/train/evaluate and SLURM guides. |
 | `lerobot_robot_kikobot/calibration.py` | Fits each joint's min/middle/max readings onto the model's range. |
 | `udev/99-kikobot.rules` | Ubuntu: serial port permissions and a stable `/dev/kikobot` name. |
@@ -694,6 +702,11 @@ on the gamepad during the reset period: the arm goes home and the object
 and pad respawn. Training and running a policy are in
 [docs/isaac-sim-record-and-train.md](docs/isaac-sim-record-and-train.md);
 the commands are the same for `kikobot_sim`.
+
+Without a human: `kikobot-datagen record` has a scripted expert do the desk
+tasks and keeps only the episodes that pass every check, then `kikobot-datagen
+convert` makes RLDS datasets for OpenVLA. On the cluster it is three `sbatch`
+jobs: [docs/datagen-openvla.md](docs/datagen-openvla.md).
 
 ---
 
