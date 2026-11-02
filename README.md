@@ -361,20 +361,26 @@ Windows (PowerShell):
   --robot.type=kikobot_follower --robot.port=COM3 --robot.id=kikobot
 ```
 
-If a calibration file exists, type `c` and Enter to redo it. Then:
+The servos never move during calibration: torque goes off as soon as it
+connects and stays off when it ends, so **support the arm the whole time**
+and lower it to rest before the last Enter.
 
-1. Torque goes off and the arm goes limp: hold it.
-2. A rerun window shows the model with one joint at a time posed at the
-   end you should move to (`--robot.display=none` turns it off; the
-   terminal also prints the limit in degrees).
-3. For each joint, J1 to J6 (and the gripper if `--robot.gripper_id` is set),
-   move it by hand and press Enter at each of:
-   - **min**: the joint's lower limit, as the model shows it;
+1. If a calibration file exists, it asks what to redo:
+   - **Enter**: keep it as it is;
+   - **`all`**: redo every joint;
+   - **joint names**: redo only those, e.g. `J3`, `gripper` or `J2 gripper`.
+     The other joints keep their saved calibration.
+   A joint missing from the file (e.g. the gripper, if you calibrated before
+   it was added) is listed as "not calibrated yet".
+2. For each joint, J1 to J6 and the gripper (bus ID 7,
+   `--robot.gripper_id`), move it by hand and press Enter at each of:
+   - **min**: the joint's lower limit (the terminal prints it in degrees;
+     for the gripper, jaws closed);
    - **middle**: anywhere in between. It is only used to tell which way
      the joint turned from min to max, so a joint whose travel passes the
      servo's 4095 → 0 wrap is still read right;
-   - **max**: the joint's upper limit.
-4. Each joint prints its travel in servo steps and how it compares with
+   - **max**: the joint's upper limit (gripper: jaws open).
+3. Each joint prints its travel in servo steps and how it compares with
    the servo's nominal 4096 steps per turn. A warning means the measured
    travel is more than 15 % off the model's: type `r` to redo that joint
    with it pushed fully to its ends, or Enter to keep it (e.g. a geared joint).
@@ -385,8 +391,13 @@ middle of its travel reads 2048 (the range never wraps), and the file
 (`%USERPROFILE%\.cache\...` on Windows) gets, per joint, the readings at
 its two ends (`range_min` / `range_max`), its direction (`drive_mode`) and
 its reading at the model's zero (`homing_offset`). Positions in between are
-linear, and goals are clamped to the measured ends. Ctrl+C before the last
-joint leaves the old calibration in place.
+linear. Ctrl+C before the last joint leaves the old calibration in place.
+
+`lerobot-teleoperate` and `lerobot-record` load that file automatically when
+given the same `--robot.id` (here `kikobot`); the log says
+`Using calibration ...` on connect, and names any joint that has none. The servo offsets live in
+the servos themselves, so the file and the arm belong together: after
+swapping a servo, recalibrate that joint.
 
 Without a calibration file the arm still runs: each servo's mid-scale
 reading (2048) is taken as the joint's zero, which is how the arm was
@@ -404,8 +415,9 @@ position before torque comes on), then eases to the ready pose at reduced
 speed.
 
 <a id="live-view"></a>**Live view.** While the arm runs, a rerun window
-shows the simulated arm following the same shaped trajectory that is
-streamed to the servos, i.e. what the sim would do with the same commands.
+shows the simulated arm on its desk (`--robot.display_scene`), following
+the same shaped trajectory that is streamed to the servos, i.e. what the
+sim would do with the same commands.
 Beside it, each joint gets a plot of its commanded and measured angle. The
 real arm should look like the picture; where it does not, the plots show
 which joint lags, overshoots or moves the opposite way (then fix its
@@ -441,7 +453,7 @@ Follower options (`--robot.<name>=`):
 | `port` | `COM3` / `/dev/ttyACM0` | Serial port |
 | `baudrate` | `1000000` | Bus speed |
 | `servo_ids` | `[1,2,3,4,5,6]` | Bus IDs of J1..J6 |
-| `gripper_id` | none | Bus ID of a gripper servo, if fitted |
+| `gripper_id` | `7` | Bus ID of the gripper servo; `null` if none is fitted |
 | `gripper_open_deg` / `gripper_closed_deg` | `0` / `-60` | Gripper servo angle at 100 % / 0 % |
 | `inverted_joints` | `[J5]` | Joints whose servo turns opposite to the model (uncalibrated only) |
 | `cameras` | none | LeRobot cameras, e.g. `"{front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}"` |
@@ -450,6 +462,7 @@ Follower options (`--robot.<name>=`):
 | `p_coefficient` / `d_coefficient` / `i_coefficient` | `16` / `32` / `0` | Servo position-loop gains |
 | `disable_torque_on_disconnect` | `false` | Off by default so the arm does not drop |
 | `display` | `rerun` | Live view of the commanded (sim) motion: `rerun`, `mujoco`, `both`, `none` ([live view](#live-view)) |
+| `display_scene` | `pick_place` | Scene of the live view: `pick_place` (the arm on its desk), `cylinder`, `empty` or an MJCF path |
 
 ---
 
@@ -535,7 +548,7 @@ all three with Python 3.11+.
 | `Could not open /dev/ttyACM0` | Wrong port (`lerobot-find-port`), or not in `dialout` (log out and in after `usermod`). |
 | `There is no status packet!` | A servo stopped replying after answering the ping. Transactions are retried and sync read falls back to single reads automatically; if it persists, the full error names the servo: check its cable and the supply (a sagging 12 V drops replies). Waveshare adapter: jumper on **A**. |
 | No rerun window opens | `rerun-sdk` comes with LeRobot's `core_scripts` extra; otherwise `pip install rerun-sdk`. Over SSH there is no display: use `--robot.display=none`. |
-| `Servos [...] did not answer` | The bus has no 12 V, a cable is loose, or `--robot.servo_ids` is wrong. |
+| `Servos [...] did not answer` | The bus has no 12 V, a cable is loose, or `--robot.servo_ids` is wrong. `[7]` alone: no gripper servo on the bus; pass `--robot.gripper_id=null`. |
 | `glfw.init() failed` | No desktop session (e.g. bare SSH on Ubuntu). Run from the desktop. |
 | `No gamepad found` | Plug the controller in, then restart (it is only detected at startup). The log lists every joystick GLFW sees; on Ubuntu, if none appear, run `sudo usermod -aG input $USER` and log in again. Xbox pads unknown to GLFW get the xpad layout automatically. |
 | Wrong device used as the gamepad | Pick its slot from the `Joystick slot N` log lines: `--teleop.joystick=N`. |

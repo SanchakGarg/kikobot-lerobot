@@ -16,7 +16,7 @@ import mujoco.viewer
 import numpy as np
 
 from .config import ARM_JOINTS
-from .paths import ARM_SCENE_PATH
+from .paths import resolve_scene
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +25,11 @@ SIM_IMAGE = "sim"
 
 
 class SimDisplay:
-    def __init__(self, mode: str, width: int = 640, height: int = 480):
+    def __init__(self, mode: str, scene: str = "pick_place", width: int = 640, height: int = 480):
         if mode not in DISPLAY_MODES:
             raise ValueError(f"display must be one of {DISPLAY_MODES}, not {mode!r}.")
         self.mode = mode
-        m = self.model = mujoco.MjModel.from_xml_path(ARM_SCENE_PATH)
+        m = self.model = mujoco.MjModel.from_xml_path(resolve_scene(scene))
         self.data = mujoco.MjData(m)
 
         def joint_adr(name: str) -> int:
@@ -73,8 +73,9 @@ class SimDisplay:
         )
         self._renderer = mujoco.Renderer(self.model, height=height, width=width)
         self._camera = mujoco.MjvCamera()
-        self._camera.lookat[:] = (0.0, 0.0, 0.15)
-        self._camera.distance = 0.75
+        # The whole desk with the arm on it.
+        self._camera.lookat[:] = (0.1, 0.05, 0.1)
+        self._camera.distance = 1.1
         self._camera.azimuth = 135.0
         self._camera.elevation = -25.0
 

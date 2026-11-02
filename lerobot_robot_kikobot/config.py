@@ -74,8 +74,9 @@ class KikobotFollowerConfig(RobotConfig):
     baudrate: int = 1_000_000
     # Bus IDs of J1..J6, in joint order.
     servo_ids: tuple[int, ...] = (1, 2, 3, 4, 5, 6)
-    # Set when a gripper servo is on the bus; `gripper.pos` is ignored otherwise.
-    gripper_id: int | None = None
+    # Bus ID of the gripper servo; None when there is none (`gripper.pos` is
+    # then ignored).
+    gripper_id: int | None = 7
     gripper_open_deg: float = 0.0
     gripper_closed_deg: float = -60.0
     # Joints whose servo turns opposite to the model. Applied on top of any
@@ -102,6 +103,9 @@ class KikobotFollowerConfig(RobotConfig):
     # Live view of the commanded (sim) motion: `rerun` (default), `mujoco`
     # (native window), `both` or `none`. Rerun also plots commanded vs measured.
     display: str = "rerun"
+    # Scene the live view draws the arm in: empty | pick_place | cylinder, or
+    # a path to an MJCF file. pick_place is the arm on its desk.
+    display_scene: str = "pick_place"
 
 
 @TeleoperatorConfig.register_subclass("kikobot_gamepad")
