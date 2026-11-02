@@ -11,11 +11,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-ISAAC = Path(__file__).resolve().parent.parent / "isaac"
+REPO = Path(__file__).resolve().parent.parent
+# Loaded by path and bare name, the way the Isaac server loads them.
+FILES = {
+    "desk_layout": REPO / "lerobot_robot_kikobot" / "desk" / "layout.py",
+    "desk_textures": REPO / "lerobot_robot_kikobot" / "desk" / "textures.py",
+    "desk_assets": REPO / "isaac" / "desk_assets.py",
+}
 
 
 def _load(name):
-    spec = importlib.util.spec_from_file_location(name, ISAAC / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, FILES[name])
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)

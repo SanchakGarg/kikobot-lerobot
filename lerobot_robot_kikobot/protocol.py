@@ -1,31 +1,31 @@
-"""Wire protocol between the `kikobot_isaac` robot and the Isaac Sim server.
+"""Wire protocol between the LeRobot side and the Kiko-Bot sim servers.
 
-Isaac Sim runs in its own process (and its own Python environment), the
-LeRobot side in another, possibly on another machine. They talk over one ZMQ
-REQ/REP socket. Every message is multipart: a JSON header first, then zero or
-more binary frames (camera images). No pickle, so neither side runs code the
-other sends.
+A sim server runs the physics in its own process, in real time, and shows it
+in a window. The LeRobot robots connect to it over one ZMQ REQ/REP socket:
+`kikobot_sim` and `kikobot_isaac` to drive and observe the simulated arm,
+and `kikobot_follower` to mirror every command it sends the real servos, so
+the sim and the physical arm move together. Every message is multipart: a
+JSON header first, then zero or more binary frames (camera images). No pickle.
 
 Requests (client -> server), all with a "cmd" key:
 
-    hello    {fps, width, height, cameras, scene, seed, motion, image_encoding}
-             -> {protocol, joints, lower_deg, upper_deg, engine}
-    reset    {ready_deg: [6 floats]}                      -> {"state"}
-    step     {action: {"J1.pos": deg, ..., "gripper.pos": %}} -> {"state"}
-    observe  {}                                           -> observation
-    close    {}                                           -> {}
+    hello    {protocol}                    -> {protocol, joints, lower_deg, upper_deg, scene, engine, ...}
+    command  {q_deg: [6], gripper_pct}     -> {state}    new actuator targets, applied at once
+    pose     {q_deg: [6], gripper_pct}     -> {state}    teleport the arm there and hold it
+    observe  {cameras, width, height, encoding} -> observation
+    reset    {ready_deg: [6]}              -> {state}    arm to ready, scene re-randomized
+    close    {}                            -> {}
 
-`step` advances physics by one control period (1/fps) and renders the
-cameras once; `observe` returns the latest state and those frames without
-stepping. LeRobot calls `get_observation` once and `send_action` once per
-tick, so each tick costs one render and the images cross the wire once.
+The MuJoCo server (`sim_server.py`) and the Isaac Sim server
+(`isaac/kikobot_isaac_server.py`) both speak it, so `kikobot_sim`,
+`kikobot_isaac` and the real arm's mirror share one client (`sim_client.py`).
+The Isaac server's scene, cameras and image size are fixed at its start; the
+MuJoCo server renders any size on request.
 
-An observation reply is the header {"state": {"J1.pos": ..., "gripper.pos":
-...}, "images": [{"name", "shape", "encoding"}, ...]} followed by one frame
-per image, in the same order. Errors come back as {"error": "message"}.
-
-This module only needs numpy and pyzmq (plus OpenCV for JPEG), so the server
-loads it by path under Isaac Sim's Python without importing LeRobot.
+`state` is {"J1.pos": deg, ..., "J6.pos": deg, "gripper.pos": % open}, the
+simulated arm's measured joints. An observation reply is the header {"state":
+..., "images": [{"name", "shape", "encoding"}, ...]} followed by one frame per
+image, in the same order. Errors come back as {"error": "message"}.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from typing import Any
 
 import numpy as np
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 DEFAULT_PORT = 5556
 IMAGE_ENCODINGS = ("raw", "jpeg")
 JPEG_QUALITY = 90

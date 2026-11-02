@@ -2,21 +2,23 @@
 
 Run it with the Python that has Isaac Sim installed (not LeRobot's):
 
-    python isaac/kikobot_isaac_server.py                    # with the Isaac Sim window
-    python isaac/kikobot_isaac_server.py --headless         # no window (servers, SSH)
+    python isaac/kikobot_isaac_server.py --scene pick_place           # with the Isaac Sim window
+    python isaac/kikobot_isaac_server.py --scene desk_sort --headless # no window (servers, SSH)
 
-then, from LeRobot's Python, `lerobot-teleoperate --robot.type=kikobot_isaac ...`.
+then, from LeRobot's Python, `lerobot-teleoperate --robot.type=kikobot_isaac ...`,
+or mirror the real arm into it with `--robot.sim_backend=isaac`.
 See docs/isaac-sim-teleop.md.
 
-The server is lockstep: physics only advances when the robot sends a `step`,
-by exactly one control period (1/fps), split into SUBSTEPS physics steps with
-the same `MotionShaper` as the MuJoCo sim and the real arm running before
-each one. A slow GPU frame therefore slows the episode down instead of
-changing the motion, and a dataset recorded here plays back the same.
+It speaks the same protocol as the MuJoCo server (`kikobot-sim-server`) and,
+like it, runs physics on wall-clock time: a `command` sets the joint drive
+targets, and the arm moves there on the following physics steps, exactly as
+the real servos move to the same goal. No shaping or filtering sits in
+between. The scene, the cameras and the image size are fixed when the server
+starts (`--scene`, `--cameras`, `--width`, `--height`).
 
-Nothing in this file imports LeRobot. `motion.py`, `motion_config.py` and
-`isaac_protocol.py` are loaded from the plugin's folder by path, and the arm
-comes from `models/usd/`, made once by `isaac/convert_mjcf.py`.
+Nothing in this file imports LeRobot. `protocol.py` and the desk layout are
+loaded from the plugin's folder by path, and the arm comes from `models/usd/`,
+made once by `isaac/convert_mjcf.py`.
 """
 
 from __future__ import annotations
@@ -43,9 +45,12 @@ DEFAULT_USD = MODELS / "usd" / "kikobot.usd"
 
 ARM_JOINTS = ("J1", "J2", "J3", "J4", "J5", "J6")
 FINGERS = ("finger_l", "finger_r")
-# Physics steps per control tick, as in sim.py.
-SUBSTEPS = 17
-# Respawn fan, as in sim.py.
+PHYSICS_DT_S = 0.002
+DEFAULT_PORT = 5557  # The MuJoCo server has 5556, so both can run at once.
+# Further behind real time than this, the sim drops the time instead of racing.
+MAX_LAG_S = 0.05
+STATS_EVERY_S = 10.0
+# Respawn fan, as in sim_server.py.
 SPAWN_RADIUS_M = (0.22, 0.32)
 SPAWN_HALF_ANGLE_RAD = math.radians(40.0)
 MIN_OBJECT_PAD_GAP_M = 0.12
@@ -74,13 +79,10 @@ def _load(name: str, path: Path):
     return mod
 
 
-# motion.py imports `motion_config` by bare name when it has no package.
-_load("motion_config", PKG / "motion_config.py")
-motion = _load("kikobot_motion", PKG / "motion.py")
-proto = _load("kikobot_isaac_protocol", PKG / "isaac_protocol.py")
+proto = _load("kikobot_protocol", PKG / "protocol.py")
 # The desk sorting station (no Isaac Sim imports at module level either).
-desk_layout = _load("desk_layout", HERE / "desk_layout.py")
-_load("desk_textures", HERE / "desk_textures.py")
+desk_layout = _load("desk_layout", PKG / "desk" / "layout.py")
+_load("desk_textures", PKG / "desk" / "textures.py")
 desk_assets = _load("desk_assets", HERE / "desk_assets.py")
 
 
@@ -142,12 +144,10 @@ def yaw_quat(yaw: float) -> np.ndarray:
 class Backend:
     """What the protocol loop needs from a simulator. Angles in radians here."""
 
-    lower: np.ndarray
-    upper: np.ndarray
     engine: str = "?"
 
-    def configure(self, fps: int, width: int, height: int, cameras: list[str], scene: str) -> None: ...
-    def reset_arm(self, q: np.ndarray, gripper_open: float) -> None: ...
+    def configure(self, physics_dt: float, width: int, height: int, cameras: list[str], scene: str) -> None: ...
+    def reset_arm(self, q: np.ndarray, gripper_open: float) -> None: ...  # teleport, at rest, and hold
     def respawn(self, obj_xy: np.ndarray, pad_xy: np.ndarray, yaw: float) -> None: ...
     # desk_sort: the items that exist (with real sizes), and one episode's layout.
     desk_pool: list = []
@@ -157,31 +157,53 @@ class Backend:
     def render(self) -> None: ...
     def joint_positions(self) -> tuple[np.ndarray, float]: ...
     def images(self) -> dict[str, np.ndarray]: ...
-    def sim_time(self) -> float: ...
     def close(self) -> None: ...
 
 
 class KikobotServer:
-    """The protocol on top of a Backend: shaping, units, episode resets."""
+    """The protocol on top of a Backend: units, limits, episode resets."""
 
-    def __init__(self, backend: Backend, limits: dict[str, tuple[float, float]], settle_s: float = SETTLE_S):
+    def __init__(
+        self,
+        backend: Backend,
+        limits: dict[str, tuple[float, float]],
+        scene: str = "pick_place",
+        cameras: tuple[str, ...] = ("record",),
+        width: int = 640,
+        height: int = 480,
+        physics_dt: float = PHYSICS_DT_S,
+        seed: int | None = None,
+        settle_s: float = SETTLE_S,
+    ):
+        unknown = [c for c in cameras if c not in CAMERAS]
+        if unknown:
+            raise ValueError(f"Unknown cameras {unknown}; this server has {list(CAMERAS)}.")
+        if scene not in SCENES:
+            raise ValueError(f"Unknown scene {scene!r}; use one of {list(SCENES)}.")
         self.b = backend
+        self.scene, self.cameras = scene, tuple(cameras)
+        self.width, self.height = width, height
+        self.physics_dt = physics_dt
         self.settle_s = settle_s
         self.placements: list = []
-        self.limits = limits
         self.lower = np.array([limits[j][0] for j in ARM_JOINTS])
         self.upper = np.array([limits[j][1] for j in ARM_JOINTS])
         self.grip_closed, self.grip_open = limits["finger_l"]
-        self.cfg: dict[str, Any] | None = None
-        self.shaper = None
-        self.target = np.zeros(len(ARM_JOINTS))
+        self.rng = np.random.default_rng(seed)
         self.gripper_pct = 100.0
-        self.rng = np.random.default_rng()
+        self.b.configure(physics_dt, width, height, list(cameras), scene)
+        log.info("Scene %r, cameras %s at %dx%d.", scene, list(cameras), width, height)
 
     # Units --------------------------------------------------------------
 
     def _finger(self, pct: float) -> float:
         return self.grip_closed + pct / 100.0 * (self.grip_open - self.grip_closed)
+
+    def _q(self, req: dict[str, Any], key: str = "q_deg") -> np.ndarray:
+        q = np.deg2rad(np.asarray(req[key], dtype=float))
+        if q.shape != (len(ARM_JOINTS),):
+            raise ValueError(f"{key} needs {len(ARM_JOINTS)} angles.")
+        return np.clip(q, self.lower, self.upper)
 
     def state(self) -> dict[str, float]:
         q, finger = self.b.joint_positions()
@@ -193,87 +215,75 @@ class KikobotServer:
     # Commands -----------------------------------------------------------
 
     def hello(self, req: dict[str, Any]) -> list[bytes]:
-        if req.get("protocol") != proto.PROTOCOL_VERSION:
-            raise ValueError(
-                f"Client speaks protocol {req.get('protocol')}, server {proto.PROTOCOL_VERSION}. "
-                "Update both from the same commit."
-            )
-        unknown = [c for c in req["cameras"] if c not in CAMERAS]
-        if unknown:
-            raise ValueError(f"Unknown cameras {unknown}; this scene has {list(CAMERAS)}.")
-        if req["scene"] not in SCENES:
-            raise ValueError(f"Unknown scene {req['scene']!r}; use one of {list(SCENES)}.")
-        if req["image_encoding"] not in proto.IMAGE_ENCODINGS:
-            raise ValueError(f"image_encoding must be one of {proto.IMAGE_ENCODINGS}.")
-        geometry = {k: req[k] for k in ("fps", "width", "height", "cameras", "scene")}
-        if self.cfg is None or {k: self.cfg[k] for k in geometry} != geometry:
-            self.b.configure(**geometry)
-        self.cfg = dict(req)
-        self.rng = np.random.default_rng(req.get("seed"))
-        self.shaper = motion.MotionShaper(len(ARM_JOINTS), motion.MotionConfig(**req["motion"]))
-        log.info("Client: %s", {k: req[k] for k in (*geometry, "seed", "image_encoding")})
         return proto.pack(
             {
                 "protocol": proto.PROTOCOL_VERSION,
                 "joints": list(ARM_JOINTS),
                 "lower_deg": np.rad2deg(self.lower).tolist(),
                 "upper_deg": np.rad2deg(self.upper).tolist(),
+                "scene": self.scene,
+                "cameras": list(self.cameras),
+                "width": self.width,
+                "height": self.height,
                 "engine": self.b.engine,
             }
         )
 
+    def command(self, req: dict[str, Any]) -> list[bytes]:
+        self.gripper_pct = float(np.clip(req.get("gripper_pct", self.gripper_pct), 0.0, 100.0))
+        self.b.set_targets(self._q(req), self._finger(self.gripper_pct))
+        return proto.pack({"state": self.state()})
+
+    def pose(self, req: dict[str, Any]) -> list[bytes]:
+        self.gripper_pct = float(np.clip(req.get("gripper_pct", self.gripper_pct), 0.0, 100.0))
+        self.b.reset_arm(self._q(req), self._finger(self.gripper_pct))
+        return proto.pack({"state": self.state()})
+
     def reset(self, req: dict[str, Any]) -> list[bytes]:
-        self._need_hello()
-        ready = np.clip(np.deg2rad(np.asarray(req["ready_deg"], dtype=float)), self.lower, self.upper)
-        self.target = ready.copy()
+        if req.get("ready_deg") is None:
+            raise ValueError("reset needs ready_deg here: Isaac Sim's Python has no MuJoCo to solve it.")
+        ready = self._q(req, "ready_deg")
         self.gripper_pct = 100.0
         self.b.reset_arm(ready, self._finger(100.0))
-        scene = self.cfg["scene"]
-        if scene == "desk_sort":
+        if self.scene == "desk_sort":
             self.placements = desk_layout.sample_desk(self.rng, self.b.desk_pool)
             self.b.randomize_desk(self.placements)
             self._settle(ready)
-        elif scene != "empty":
+        elif self.scene != "empty":
             self.b.respawn(*spawn_positions(self.rng))
-        self.shaper.reset(ready, self.b.sim_time())
         self.b.render()
         return proto.pack({"state": self.state()})
 
     def _settle(self, ready: np.ndarray) -> None:
         """Let dropped items come to rest with the arm held at ready, then put
         the arm back exactly at ready."""
-        n = int(round(self.settle_s * self.cfg["fps"] * SUBSTEPS))
         finger = self._finger(100.0)
-        for _ in range(n):
-            self.b.set_targets(ready, finger)
+        self.b.set_targets(ready, finger)
+        for _ in range(int(round(self.settle_s / self.physics_dt))):
             self.b.physics_step()
         self.b.reset_arm(ready, finger)
 
-    def step(self, req: dict[str, Any]) -> list[bytes]:
-        self._need_hello()
-        action = req["action"]
-        for i, j in enumerate(ARM_JOINTS):
-            if f"{j}.pos" in action:
-                self.target[i] = math.radians(float(action[f"{j}.pos"]))
-        self.target = np.clip(self.target, self.lower, self.upper)
-        if "gripper.pos" in action:
-            self.gripper_pct = float(np.clip(action["gripper.pos"], 0.0, 100.0))
-        self.shaper.set_target(self.target, self.b.sim_time())
-        finger = self._finger(self.gripper_pct)
-        for _ in range(SUBSTEPS):
-            self.b.set_targets(self.shaper.step(self.b.sim_time()), finger)
-            self.b.physics_step()
-        self.b.render()
-        return proto.pack({"state": self.state()})
-
     def observe(self, req: dict[str, Any]) -> list[bytes]:
-        self._need_hello()
-        imgs = self.b.images()
-        return proto.pack_observation(self.state(), imgs, self.cfg["image_encoding"])
-
-    def _need_hello(self) -> None:
-        if self.cfg is None or self.shaper is None:
-            raise RuntimeError("Send `hello` first.")
+        wanted = list(req.get("cameras", []))
+        unknown = [c for c in wanted if c not in self.cameras]
+        if unknown:
+            raise ValueError(
+                f"Unknown cameras {unknown}; this server renders {list(self.cameras)} "
+                "(start it with --cameras)."
+            )
+        if wanted and (req.get("width", self.width), req.get("height", self.height)) != (self.width, self.height):
+            raise ValueError(
+                f"This server renders {self.width}x{self.height}, not {req.get('width')}x{req.get('height')}: "
+                "start it with matching --width/--height, or set --robot.width/height."
+            )
+        encoding = req.get("encoding", "raw")
+        if encoding not in proto.IMAGE_ENCODINGS:
+            raise ValueError(f"encoding must be one of {proto.IMAGE_ENCODINGS}.")
+        images = {}
+        if wanted:
+            self.b.render()
+            images = {c: img for c, img in self.b.images().items() if c in wanted}
+        return proto.pack_observation(self.state(), images, encoding)
 
     def handle(self, parts: list[bytes]) -> list[bytes]:
         try:
@@ -282,7 +292,10 @@ class KikobotServer:
             if cmd == "close":
                 log.info("Client disconnected.")
                 return proto.pack({})
-            handler = {"hello": self.hello, "reset": self.reset, "step": self.step, "observe": self.observe}.get(cmd)
+            handler = {
+                "hello": self.hello, "command": self.command, "pose": self.pose,
+                "reset": self.reset, "observe": self.observe,
+            }.get(cmd)
             if handler is None:
                 raise ValueError(f"Unknown command {cmd!r}.")
             return handler(req)
@@ -291,9 +304,10 @@ class KikobotServer:
             return proto.pack({"error": f"{type(e).__name__}: {e}"})
 
 
-def serve(server: KikobotServer, bind: str, keep_running=lambda: True, idle=lambda: None) -> None:
-    """Answer requests until keep_running() is False. `idle` runs while waiting
-    (Isaac Sim uses it to keep its window responsive between requests)."""
+def serve(server: KikobotServer, bind: str, keep_running=lambda: True, idle=lambda: None,
+          render_hz: float = 30.0) -> None:
+    """Step physics on wall-clock time and answer requests between steps until
+    keep_running() is False. `idle` redraws the window, at `render_hz`."""
     import zmq
 
     ctx = zmq.Context.instance()
@@ -301,14 +315,37 @@ def serve(server: KikobotServer, bind: str, keep_running=lambda: True, idle=lamb
     sock.setsockopt(zmq.LINGER, 0)
     sock.bind(bind)
     log.info("Serving Kiko-Bot on %s", bind)
-    poller = zmq.Poller()
-    poller.register(sock, zmq.POLLIN)
+    dt = server.physics_dt
+    start = time.perf_counter()
+    sim_t = dropped = 0.0
+    last_render = last_stats = start
+    steps_since_stats = 0
     try:
         while keep_running():
-            if not poller.poll(timeout=20):
+            now = time.perf_counter()
+            behind = (now - start - dropped) - sim_t
+            if behind > MAX_LAG_S:
+                dropped += behind - dt
+                behind = dt
+            n = int(behind / dt)
+            for _ in range(n):
+                server.b.physics_step()
+            sim_t += n * dt
+            steps_since_stats += n
+            if now - last_render >= 1.0 / render_hz:
                 idle()
-                continue
-            sock.send_multipart(server.handle(sock.recv_multipart()))
+                last_render = now
+            if now - last_stats >= STATS_EVERY_S:
+                log.info("Real-time factor %.2f.", steps_since_stats * dt / (now - last_stats))
+                last_stats, steps_since_stats = now, 0
+            wait_ms = int(max(0.0, dt - (behind - n * dt)) * 1000)
+            if sock.poll(wait_ms):
+                while True:
+                    try:
+                        parts = sock.recv_multipart(zmq.NOBLOCK)
+                    except zmq.Again:
+                        break
+                    sock.send_multipart(server.handle(parts))
     finally:
         sock.close(linger=0)
 
@@ -340,7 +377,6 @@ class IsaacNewtonBackend(Backend):
             self._enable(ext)
         self.cfg: dict[str, Any] | None = None
         self._annotators: dict[str, Any] = {}
-        self._t = 0.0
         self._warned_blank = False
 
     @staticmethod
@@ -353,14 +389,14 @@ class IsaacNewtonBackend(Backend):
 
     # Scene -----------------------------------------------------------------
 
-    def configure(self, fps: int, width: int, height: int, cameras: list[str], scene: str) -> None:
+    def configure(self, physics_dt: float, width: int, height: int, cameras: list[str], scene: str) -> None:
         import omni.timeline
         import omni.usd
         from isaacsim.core.simulation_manager import SimulationManager
         from isaacsim.core.simulation_manager.impl.mjc_scene import NewtonMjcScene
 
-        self.cfg = dict(fps=fps, width=width, height=height, cameras=cameras, scene=scene)
-        self.dt = 1.0 / (fps * SUBSTEPS)
+        self.cfg = dict(width=width, height=height, cameras=cameras, scene=scene)
+        self.dt = physics_dt
         timeline = omni.timeline.get_timeline_interface()
         timeline.stop()
         omni.usd.get_context().new_stage()
@@ -385,7 +421,8 @@ class IsaacNewtonBackend(Backend):
         self._add_arm(stage)
         self._add_cameras(stage, cameras, width, height)
 
-        # Fixed-step, unthrottled main loop: physics is advanced only by step().
+        # Fixed-step, unthrottled main loop: physics is advanced only by the
+        # server's real-time loop, through physics_step().
         import carb
 
         settings = carb.settings.get_settings()
@@ -410,8 +447,7 @@ class IsaacNewtonBackend(Backend):
         self.desk_view = None
         if scene == "desk_sort":
             self.desk_view = RigidPrim([self.desk.paths[it.name] for it in self.desk_pool])
-        timeline.pause()  # step() advances physics explicitly from here on.
-        self._t = 0.0
+        timeline.pause()  # physics_step() advances physics explicitly from here on.
         log.info("Scene %r ready: dofs %s, physics dt %.5f s.", scene, names, self.dt)
 
     def _build_world(self, stage, scene: str) -> None:
@@ -644,7 +680,6 @@ class IsaacNewtonBackend(Backend):
         from isaacsim.core.simulation_manager import SimulationManager
 
         SimulationManager.step(steps=1)
-        self._t += self.dt
 
     def render(self) -> None:
         # Paused timeline: draws the frame and fills the annotators, no physics.
@@ -667,9 +702,6 @@ class IsaacNewtonBackend(Backend):
             out[name] = data[..., :3]
         return out
 
-    def sim_time(self) -> float:
-        return self._t
-
     def close(self) -> None:
         self.timeline.stop()
 
@@ -684,9 +716,17 @@ def _numpy(x) -> np.ndarray:
 
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--bind", default=f"tcp://127.0.0.1:{proto.DEFAULT_PORT}",
-                   help="ZMQ address to listen on. Use tcp://*:5556 to accept other machines "
+    p.add_argument("--bind", default=f"tcp://127.0.0.1:{DEFAULT_PORT}",
+                   help=f"ZMQ address to listen on. Use tcp://*:{DEFAULT_PORT} to accept other machines "
                         "(prefer an SSH tunnel; the protocol has no authentication).")
+    p.add_argument("--scene", choices=SCENES, default="pick_place")
+    p.add_argument("--cameras", nargs="*", choices=CAMERAS, default=["record"],
+                   help="Cameras to render (the robot's --robot.camera_names picks from these).")
+    p.add_argument("--width", type=int, default=640)
+    p.add_argument("--height", type=int, default=480)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--physics-dt", type=float, default=PHYSICS_DT_S, help="Physics step, seconds.")
+    p.add_argument("--render-hz", type=float, default=30.0, help="Window redraw rate.")
     p.add_argument("--headless", action="store_true", help="No Isaac Sim window.")
     p.add_argument("--livestream", action="store_true",
                    help="With --headless: stream the viewport (Isaac Sim WebRTC Streaming Client).")
@@ -726,8 +766,11 @@ def main(argv=None) -> None:
         IsaacNewtonBackend._enable("omni.kit.livestream.webrtc")
     try:
         backend = IsaacNewtonBackend(app, args)
-        server = KikobotServer(backend, mjcf_limits(), settle_s=args.settle_s)
-        serve(server, args.bind, keep_running=app.is_running, idle=app.update)
+        server = KikobotServer(
+            backend, mjcf_limits(), args.scene, tuple(args.cameras), args.width, args.height,
+            args.physics_dt, args.seed, settle_s=args.settle_s,
+        )
+        serve(server, args.bind, keep_running=app.is_running, idle=backend.render, render_hz=args.render_hz)
     except KeyboardInterrupt:
         pass
     finally:

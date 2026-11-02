@@ -2,7 +2,7 @@
 
 | Problem | Fix |
 |---|---|
-| `No reply from the Isaac Sim server at tcp://127.0.0.1:5556` | **Is the server running?** It must say `Serving Kiko-Bot on ...` before you start LeRobot. **First connect after a fresh install?** Shader compilation can take minutes; raise `--robot.connect_timeout_s=600`. **Remote?** Check the SSH tunnel is up. |
+| `No reply from the sim server at tcp://127.0.0.1:5557` | **Is the server running?** It must say `Serving Kiko-Bot on ...` before you start LeRobot. **First connect after a fresh install?** Shader compilation can take minutes; raise `--robot.connect_timeout_s=600`. **Remote?** Check the SSH tunnel is up. |
 | `models/usd/kikobot.usd not found` | Run `isaac\convert_mjcf.py` with Isaac Sim's Python ([setup §3](isaac-sim-setup.md#3-convert-the-arm-to-usd)). |
 | `ModuleNotFoundError: zmq` in the server | Install it in the Isaac Sim env: `& "$I\pip.exe" install pyzmq`. |
 | `ModuleNotFoundError: isaacsim` | You started the server with LeRobot's Python. Use `"$W\isaacsim-env\Scripts\python.exe"` (`$I` in the guides). |

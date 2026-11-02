@@ -172,21 +172,21 @@ Terminal 1, the sim:
 
 ```powershell
 cd $W\kikobot-lerobot
-& "$I\python.exe" isaac\kikobot_isaac_server.py
+& "$I\python.exe" isaac\kikobot_isaac_server.py --scene pick_place
 ```
 
-Wait for `Serving Kiko-Bot on tcp://127.0.0.1:5556`. The Isaac Sim window
-stays empty until a client connects.
+Wait for `Serving Kiko-Bot on tcp://127.0.0.1:5557`. The scene is built
+when the server starts, and physics runs in real time from then on.
 
 Terminal 2, LeRobot, with the gamepad plugged in:
 
 ```powershell
 & "$W\lerobot\.venv\Scripts\lerobot-teleoperate.exe" `
-  --robot.type=kikobot_isaac --teleop.type=kikobot_gamepad
+  --robot.type=kikobot_isaac --teleop.type=kikobot_gamepad --fps=60
 ```
 
-The server log shows `Scene 'pick_place' ready`, and the arm, desk, red cube
-and green pad appear. The left stick moves the gripper. Check, in order:
+The server log shows `Scene 'pick_place' ready` at start, with the arm,
+desk, red cube and green pad. On connect the scene resets. The left stick moves the gripper. Check, in order:
 
 1. **Server log:** it shows `Physics variants [...]` and the dof list, and the
    dofs include J1..J6 and `finger_l`.
@@ -214,7 +214,7 @@ $W/isaacsim-env/bin/python isaac/kikobot_isaac_server.py --headless --livestream
 On the LeRobot machine, forward the port over SSH and connect through it:
 
 ```bash
-ssh -N -L 5556:127.0.0.1:5556 user@isaac-machine &
+ssh -N -L 5557:127.0.0.1:5557 user@isaac-machine &
 lerobot-teleoperate --robot.type=kikobot_isaac --robot.image_encoding=jpeg \
   --teleop.type=kikobot_gamepad
 ```
@@ -225,5 +225,5 @@ lerobot-teleoperate --robot.type=kikobot_isaac --robot.image_encoding=jpeg \
   NVIDIA's *Isaac Sim WebRTC Streaming Client*, pointed at the Isaac
   machine's address.
 - **Security:** the server listens only on 127.0.0.1 by default, and the
-  protocol has no authentication. `--bind tcp://*:5556` would accept anyone
+  protocol has no authentication. `--bind tcp://*:5557` would accept anyone
   on the network, so keep to the SSH tunnel.

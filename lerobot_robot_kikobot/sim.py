@@ -1,18 +1,18 @@
-"""The Kiko-Bot MuJoCo scene behind LeRobot's `Robot` interface.
+"""The simulated Kiko-Bot behind LeRobot's `Robot` interface.
 
-Same keys and units as the real arm. Each `send_action` advances physics by
-one control period, running the same `MotionShaper` as the hardware on every
-physics step, so what you see in sim is what the servos will do.
+The physics runs in `kikobot-sim-server`, in real time, in its own process;
+this class sends it joint targets and reads back joint angles and camera
+frames. Same keys and units as the real arm (`J1.pos`..`J6.pos` in degrees,
+`gripper.pos` in % open), so a teleop, dataset or policy works on either.
 """
 
 from __future__ import annotations
 
-import math
+import logging
+import time
 from functools import cached_property
 from typing import Any
 
-import mujoco
-import mujoco.viewer
 import numpy as np
 
 from lerobot.lerobot_types import RobotAction, RobotObservation
@@ -22,15 +22,11 @@ from lerobot.utils.decorators import check_if_already_connected, check_if_not_co
 from . import events
 from .config import ARM_JOINTS, KikobotSimConfig
 from .kinematics import ArmKinematics
-from .motion import MotionShaper
-from .paths import resolve_scene
+from .motion import RateLimiter
+from .protocol import IMAGE_ENCODINGS, unpack_observation
+from .sim_client import SimClient
 
-# Physics steps per control tick; `connect` sets the timestep to fit.
-SUBSTEPS = 17
-# Objects respawn in a fan in front of the arm, within comfortable reach.
-SPAWN_RADIUS_M = (0.22, 0.32)
-SPAWN_HALF_ANGLE_RAD = math.radians(40.0)
-MIN_OBJECT_PAD_GAP_M = 0.12
+logger = logging.getLogger(__name__)
 
 
 class KikobotSim(Robot):
@@ -40,14 +36,15 @@ class KikobotSim(Robot):
     def __init__(self, config: KikobotSimConfig):
         super().__init__(config)
         self.config = config
-        self.model: mujoco.MjModel | None = None
-        self.data: mujoco.MjData | None = None
-        self.rng = np.random.default_rng(config.seed)
-        self._renderer: mujoco.Renderer | None = None
-        self._viewer = None
-        self._shaper: MotionShaper | None = None
+        if config.image_encoding not in IMAGE_ENCODINGS:
+            raise ValueError(f"--robot.image_encoding must be one of {IMAGE_ENCODINGS}")
+        self.client: SimClient | None = None
+        self.server_info: dict[str, Any] = {}
+        # In degrees here: the limiter does not care about units.
+        self._limiter = RateLimiter(config.max_velocity_deg_s)
         self._target = np.zeros(len(ARM_JOINTS))
         self._gripper_pct = 100.0
+        self._ready_deg = np.rad2deg(ArmKinematics().ready_q())
 
     # ---------------------------------------------------------------- features
 
@@ -68,36 +65,42 @@ class KikobotSim(Robot):
 
     @property
     def is_connected(self) -> bool:
-        return self.data is not None
+        return self.client is not None
 
     @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
-        m = self.model = mujoco.MjModel.from_xml_path(resolve_scene(self.config.scene))
-        m.opt.timestep = 1.0 / (self.config.fps * SUBSTEPS)
-        self.data = mujoco.MjData(m)
+        cfg = self.config
+        client = SimClient(cfg.host, cfg.port, cfg.connect_timeout_s)
+        try:
+            self.server_info = client.hello()
+            # A fresh server's first reset can be slow (shader compile): keep the
+            # long timeout for it.
+            self.client = client
+            if cfg.reset_on_connect:
+                self.reset_scene()
+        except Exception:
+            self.client = None
+            client.close()
+            raise
+        client.set_timeout(cfg.timeout_s)
+        self._lower = np.asarray(self.server_info["lower_deg"], dtype=float)
+        self._upper = np.asarray(self.server_info["upper_deg"], dtype=float)
+        logger.info(
+            "Connected to the %s server at %s (scene %s).",
+            self.server_info.get("engine", "sim"), client.address, self.server_info["scene"],
+        )
+        if not cfg.reset_on_connect:
+            state = self._observe_state()
+            self._hold(np.array([state[f"{j}.pos"] for j in ARM_JOINTS]), state["gripper.pos"])
 
-        def id_of(kind, name):
-            return mujoco.mj_name2id(m, kind, name)
+    def _hold(self, q_deg: np.ndarray, gripper_pct: float) -> None:
+        self._target = np.asarray(q_deg, dtype=float).copy()
+        self._gripper_pct = float(gripper_pct)
+        self._limiter.reset(self._target, time.perf_counter())
 
-        joints = [id_of(mujoco.mjtObj.mjOBJ_JOINT, j) for j in ARM_JOINTS]
-        self._qpos_adr = m.jnt_qposadr[joints]
-        self._arm_act = np.array([id_of(mujoco.mjtObj.mjOBJ_ACTUATOR, j) for j in ARM_JOINTS])
-        self._grip_act = id_of(mujoco.mjtObj.mjOBJ_ACTUATOR, "finger_l")
-        self._grip_qpos = m.jnt_qposadr[id_of(mujoco.mjtObj.mjOBJ_JOINT, "finger_l")]
-        self._grip_closed, self._grip_open = m.actuator_ctrlrange[self._grip_act]
-        self._lower = m.jnt_range[joints, 0].copy()
-        self._upper = m.jnt_range[joints, 1].copy()
-        # The first free joint is the object to pick; the pad is a mocap body.
-        free = [j for j in range(m.njnt) if m.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE]
-        self._object_adr = int(m.jnt_qposadr[free[0]]) if free else None
-        pad = id_of(mujoco.mjtObj.mjOBJ_BODY, "place_pad")
-        self._pad_mocap = int(m.body_mocapid[pad]) if pad >= 0 else -1
-
-        self._shaper = MotionShaper(len(ARM_JOINTS), self.config.motion)
-        self._renderer = mujoco.Renderer(m, height=self.config.height, width=self.config.width)
-        self.reset_scene()
-        if self.config.viewer:
-            self._viewer = mujoco.viewer.launch_passive(m, self.data)
+    def _observe_state(self) -> dict[str, float]:
+        reply, _ = self.client.call({"cmd": "observe", "cameras": []})
+        return reply["state"]
 
     @property
     def is_calibrated(self) -> bool:
@@ -111,93 +114,45 @@ class KikobotSim(Robot):
 
     @check_if_not_connected
     def disconnect(self) -> None:
-        if self._viewer is not None:
-            self._viewer.close()
-            self._viewer = None
-        self._renderer.close()
-        self._renderer = None
-        self.model = self.data = None
+        self.client.close()
+        self.client = None
+        self.server_info = {}
 
     # ----------------------------------------------------------------- episode
 
     def reset_scene(self) -> None:
-        """Arm to the ready pose (where the gamepad teleop starts), jaws open,
-        object and pad respawned. LeRobot has no episode hook; scripts call it."""
-        m, d = self.model, self.data
-        mujoco.mj_resetData(m, d)
-        ready = ArmKinematics().ready_q()
-        d.qpos[self._qpos_adr] = ready
-        d.ctrl[self._arm_act] = ready
-        self._gripper_pct = 100.0
-        d.ctrl[self._grip_act] = self._grip_open
-        self._target = ready.copy()
-        self._respawn_objects()
-        mujoco.mj_forward(m, d)
-        self._shaper.reset(ready, d.time)
-
-    def _sample_xy(self) -> np.ndarray:
-        r = self.rng.uniform(*SPAWN_RADIUS_M)
-        a = self.rng.uniform(-SPAWN_HALF_ANGLE_RAD, SPAWN_HALF_ANGLE_RAD)
-        return np.array([r * math.cos(a), r * math.sin(a)])
-
-    def _respawn_objects(self) -> None:
-        obj_xy = self._sample_xy()
-        if self._object_adr is not None:
-            adr = self._object_adr
-            # Keep the XML's height and tilt (a lying cylinder stays lying),
-            # then spin about world Z.
-            base = self.model.qpos0[adr + 3 : adr + 7]
-            yaw = np.zeros(4)
-            mujoco.mju_axisAngle2Quat(yaw, np.array([0.0, 0.0, 1.0]), self.rng.uniform(-math.pi, math.pi))
-            quat = np.zeros(4)
-            mujoco.mju_mulQuat(quat, yaw, base)
-            self.data.qpos[adr : adr + 3] = (*obj_xy, self.model.qpos0[adr + 2])
-            self.data.qpos[adr + 3 : adr + 7] = quat
-        if self._pad_mocap >= 0:
-            pad_xy = self._sample_xy()
-            for _ in range(100):
-                if np.linalg.norm(pad_xy - obj_xy) >= MIN_OBJECT_PAD_GAP_M:
-                    break
-                pad_xy = self._sample_xy()
-            self.data.mocap_pos[self._pad_mocap][:2] = pad_xy
+        """Arm to the ready pose, jaws open, objects respawned. LeRobot has no
+        episode hook; the gamepad's Back button triggers it."""
+        # Sent from here: the Isaac server has no MuJoCo to solve it.
+        reply, _ = self.client.call({"cmd": "reset", "ready_deg": self._ready_deg.tolist()})
+        state = reply["state"]
+        self._hold(np.array([state[f"{j}.pos"] for j in ARM_JOINTS]), 100.0)
 
     # --------------------------------------------------------------------- i/o
 
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
-        d = self.data
-        obs: dict[str, Any] = {
-            f"{j}.pos": float(np.rad2deg(d.qpos[a])) for j, a in zip(ARM_JOINTS, self._qpos_adr)
-        }
-        span = self._grip_open - self._grip_closed
-        obs["gripper.pos"] = float(100.0 * (d.qpos[self._grip_qpos] - self._grip_closed) / span)
-        for cam in self.config.camera_names:
-            self._renderer.update_scene(d, camera=cam)
-            obs[cam] = self._renderer.render()
-        return obs
+        cfg = self.config
+        reply, frames = self.client.call({
+            "cmd": "observe",
+            "cameras": list(cfg.camera_names),
+            "width": cfg.width,
+            "height": cfg.height,
+            "encoding": cfg.image_encoding,
+        })
+        return unpack_observation(reply, frames)
 
     @check_if_not_connected
     def send_action(self, action: RobotAction) -> RobotAction:
         if events.take_scene_reset():
             self.reset_scene()
-        m, d = self.model, self.data
         for i, j in enumerate(ARM_JOINTS):
             if f"{j}.pos" in action:
-                self._target[i] = math.radians(action[f"{j}.pos"])
-        self._target = np.clip(self._target, self._lower, self._upper)
+                self._target[i] = float(np.clip(action[f"{j}.pos"], self._lower[i], self._upper[i]))
         if "gripper.pos" in action:
             self._gripper_pct = float(np.clip(action["gripper.pos"], 0.0, 100.0))
-
-        self._shaper.set_target(self._target, d.time)
-        d.ctrl[self._grip_act] = self._grip_closed + self._gripper_pct / 100.0 * (
-            self._grip_open - self._grip_closed
-        )
-        for _ in range(SUBSTEPS):
-            d.ctrl[self._arm_act] = self._shaper.step(d.time)
-            mujoco.mj_step(m, d)
-        if self._viewer is not None:
-            self._viewer.sync()
-
-        sent = {f"{j}.pos": float(np.rad2deg(self._target[i])) for i, j in enumerate(ARM_JOINTS)}
+        q = self._limiter.step(self._target, time.perf_counter())
+        self.client.call({"cmd": "command", "q_deg": q.tolist(), "gripper_pct": self._gripper_pct})
+        sent = {f"{j}.pos": float(q[i]) for i, j in enumerate(ARM_JOINTS)}
         sent["gripper.pos"] = self._gripper_pct
         return sent

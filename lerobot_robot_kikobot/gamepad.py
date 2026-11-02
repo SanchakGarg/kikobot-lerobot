@@ -5,8 +5,10 @@ all six joints turns that into joint targets. The teleop owns the
 commanded pose and solves on its own copy of the model, so it works under
 plain `lerobot-teleoperate` / `lerobot-record` with no link to the robot.
 It starts at the home pose saved by `lerobot-calibrate` for `--teleop.robot_id`,
-or else at the ready pose the sim resets to; the real arm's motion shaper
-eases into it from wherever the arm is.
+or else at the ready pose the sim resets to; the real arm moves there slowly
+from wherever it is (its soft start). Y glides back home along a smooth
+(minimum-jerk) path, so the sim and the real arm both get smooth targets
+and need no filter of their own.
 
 Xbox layout (PlayStation: cross = A, circle = B, square = X, triangle = Y):
 
@@ -50,6 +52,9 @@ IK_ITERATIONS = 4
 POS_TOLERANCE_M = 0.0015
 ROT_TOLERANCE_RAD = math.radians(1.0)
 STEP_FRACTIONS = (1.0, 0.5, 0.25)
+# The glide home on Y: at most this joint speed, and never quicker than this.
+GLIDE_SPEED_RAD_S = math.radians(60.0)
+GLIDE_MIN_S = 0.6
 
 # Button and axis layout of Linux's xpad driver (Xbox 360 / One / Series
 # pads over USB). Applied to Xbox pads missing from GLFW's built-in mapping
@@ -84,6 +89,8 @@ class KikobotGamepad(Teleoperator):
         self._precision = False
         self._last_buttons: dict[str, bool] = {}
         self._last_t: float | None = None
+        # (start q, start gripper %, start time, duration) of a glide home.
+        self._glide: tuple[np.ndarray, float, float, float] | None = None
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -164,11 +171,27 @@ class KikobotGamepad(Teleoperator):
             )
 
     def _go_ready(self) -> None:
+        self._glide = None
         self._q = self._home_q.copy()
         self._pos, self._rot = self.kin.fk(self._q)
         self._twist[:] = 0.0
         if self._home_gripper is not None:
             self._gripper_pct = float(self._home_gripper)
+
+    def _start_glide(self, now: float) -> None:
+        distance = float(np.max(np.abs(self._home_q - self._q)))
+        self._glide = (self._q.copy(), self._gripper_pct, now, max(GLIDE_MIN_S, distance / GLIDE_SPEED_RAD_S))
+        self._twist[:] = 0.0
+
+    def _step_glide(self, now: float) -> None:
+        q0, grip0, t0, duration = self._glide
+        s = min(1.0, (now - t0) / duration)
+        a = s**3 * (10.0 - 15.0 * s + 6.0 * s * s)  # Minimum jerk: starts and ends at rest.
+        self._q = q0 + a * (self._home_q - q0)
+        if self._home_gripper is not None:
+            self._gripper_pct = float(grip0 + a * (self._home_gripper - grip0))
+        if s >= 1.0:
+            self._go_ready()
 
     @property
     def is_calibrated(self) -> bool:
@@ -240,14 +263,19 @@ class KikobotGamepad(Teleoperator):
             self._precision = not self._precision
             logger.info("Precision mode %s.", "on" if self._precision else "off")
         if self._rising(buttons, "y"):
-            self._go_ready()
+            self._start_glide(now)
         if self._rising(buttons, "back"):
-            # Sim only: respawn the scene (the robot takes the request on its
-            # next send_action) and start again from home.
+            # Sim only: respawn the scene (kikobot_sim takes the request on
+            # its next send_action, and puts the arm at ready) and start again
+            # from home at once, as the sim does.
             events.request_scene_reset()
             self._go_ready()
             logger.info("Scene reset requested.")
         self._last_buttons = buttons
+        if self._glide is not None:
+            # Sticks wait until the arm is home.
+            self._step_glide(now)
+            return self._action()
 
         # Speeding up: first-order low-pass, so a flicked stick ramps the
         # speed, never steps it. Easing off: the speed falls at a fixed rate,
@@ -269,7 +297,9 @@ class KikobotGamepad(Teleoperator):
 
         if np.any(lin) or np.any(rotvec):
             self._step_pose(lin, rotvec)
+        return self._action()
 
+    def _action(self) -> RobotAction:
         action = {f"{j}.pos": float(np.rad2deg(self._q[i])) for i, j in enumerate(ARM_JOINTS)}
         action["gripper.pos"] = self._gripper_pct
         return action
@@ -300,6 +330,5 @@ class KikobotGamepad(Teleoperator):
 
     @check_if_not_connected
     def disconnect(self) -> None:
-        # No glfw.terminate(): a MuJoCo viewer in this process shares GLFW,
-        # and terminating it would close that window too.
+        self._glfw.terminate()
         self._glfw = None

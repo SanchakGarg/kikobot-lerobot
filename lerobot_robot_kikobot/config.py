@@ -1,6 +1,6 @@
 """Configs for the three LeRobot devices this plugin registers.
 
-Every field is settable from the CLI, e.g. `--robot.motion.shaper_type=zvd`.
+Every field is settable from the CLI, e.g. `--robot.max_velocity_deg_s=150`.
 """
 
 from __future__ import annotations
@@ -12,7 +12,11 @@ from lerobot.cameras import CameraConfig
 from lerobot.robots import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
 
-from .motion_config import MotionConfig
+from .protocol import DEFAULT_PORT
+
+# The Isaac Sim server listens here by default, so both servers can run at once.
+ISAAC_DEFAULT_PORT = DEFAULT_PORT + 1
+SIM_BACKENDS = ("mujoco", "isaac", "none")
 
 ARM_JOINTS = ("J1", "J2", "J3", "J4", "J5", "J6")
 
@@ -26,49 +30,40 @@ def default_port() -> str:
 @RobotConfig.register_subclass("kikobot_sim")
 @dataclass
 class KikobotSimConfig(RobotConfig):
-    # empty | pick_place | cylinder, or a path to an MJCF file.
-    scene: str = "pick_place"
-    fps: int = 30
+    """The simulated arm, run by `kikobot-sim-server` (start that first)."""
+
+    host: str = "127.0.0.1"
+    port: int = DEFAULT_PORT
+    # Seconds to wait for each server reply, and for the first one.
+    timeout_s: float = 5.0
+    connect_timeout_s: float = 10.0
+    # Cameras of the server's scene to observe: record (front) and/or overhead.
+    # Not `cameras`: RobotConfig reserves that name for CameraConfig objects.
+    camera_names: tuple[str, ...] = ("record",)
     # Offscreen framebuffer is capped at 1280x720 by the scene XML.
     width: int = 640
     height: int = 480
-    # Not `cameras`: RobotConfig reserves that name for CameraConfig objects.
-    camera_names: tuple[str, ...] = ("record",)
-    seed: int | None = None
-    # Native MuJoCo window. macOS needs `mjpython` instead of `python`.
-    viewer: bool = False
-    motion: MotionConfig = field(default_factory=MotionConfig)
+    # raw: exact pixels (use on one machine). jpeg: ~20x smaller (over a network).
+    image_encoding: str = "raw"
+    # Reset the scene (arm to ready, objects respawned) when connecting.
+    reset_on_connect: bool = True
+    # Joint speed cap, the same as the real arm's.
+    max_velocity_deg_s: float = 180.0
 
 
 @RobotConfig.register_subclass("kikobot_isaac")
 @dataclass
-class KikobotIsaacConfig(RobotConfig):
-    """The arm in NVIDIA Isaac Sim (Newton physics), via `isaac/kikobot_isaac_server.py`.
+class KikobotIsaacConfig(KikobotSimConfig):
+    """The arm in NVIDIA Isaac Sim, run by `isaac/kikobot_isaac_server.py` (start that first).
 
-    The server runs Isaac Sim in its own process; this robot connects to it.
-    Start the server first. See docs/isaac-sim-teleop.md.
+    Same protocol and behaviour as `kikobot_sim`. The scene, cameras and image
+    size are chosen when starting the server. See docs/isaac-sim-teleop.md.
     """
 
-    host: str = "127.0.0.1"
-    port: int = 5556
-    # Seconds to wait for each server reply. The first reply after connecting
-    # can be slow while Isaac Sim compiles shaders; `connect` waits longer.
+    port: int = ISAAC_DEFAULT_PORT
+    # Isaac's RTX renders are slower, and the first one compiles shaders.
     timeout_s: float = 10.0
     connect_timeout_s: float = 120.0
-    # empty | pick_place | cylinder | desk_sort. The server builds the matching scene.
-    # desk_sort: pen cup, tray and random pens, glue, tape, scissors... (docs/isaac-sim-teleop.md).
-    scene: str = "pick_place"
-    fps: int = 30
-    width: int = 640
-    height: int = 480
-    # record (front) and/or overhead (top-down on the desk).
-    camera_names: tuple[str, ...] = ("record",)
-    seed: int | None = None
-    # raw: exact pixels (use on one machine). jpeg: ~20x smaller (use over a network).
-    image_encoding: str = "raw"
-    # Reset the scene (arm to ready, objects respawned) when connecting.
-    reset_on_connect: bool = True
-    motion: MotionConfig = field(default_factory=MotionConfig)
 
 
 @RobotConfig.register_subclass("kikobot_follower")
@@ -88,13 +83,12 @@ class KikobotFollowerConfig(RobotConfig):
     inverted_joints: tuple[str, ...] = ("J5",)
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
 
-    # Goal positions are streamed by a background thread at this rate, in one
-    # sync-write packet for all servos, independent of the LeRobot loop's fps.
-    stream_hz: float = 100.0
-    # Present positions are read every Nth stream tick. A read waits for the
-    # replies; a write does not, so reads are what limit the stream rate.
-    read_every: int = 3
-    motion: MotionConfig = field(default_factory=MotionConfig)
+    # Every send_action writes its goal straight to the servos in one
+    # sync-write packet, as LeRobot's SO-101 does: no filter, no delay. This
+    # only caps joint speed, for targets that jump (a policy's first action).
+    max_velocity_deg_s: float = 180.0
+    # Speed of the first move after connecting, from wherever the arm was.
+    soft_start_deg_s: float = 30.0
 
     # Position-loop gains written to each servo (same as LeRobot's SO-101).
     # Feetech's factory P of 32 overshoots and buzzes on a loaded arm.
@@ -112,14 +106,20 @@ class KikobotFollowerConfig(RobotConfig):
 
     # Dropping torque lets a gravity-loaded arm fall, so the default keeps it on.
     disable_torque_on_disconnect: bool = False
-    # Live view of the commanded (sim) motion: `rerun` (default), `mujoco`
-    # (native window), `both` or `none`. Rerun also plots commanded vs measured.
-    display: str = "rerun"
-    # Scene the live view draws the arm in: empty | pick_place | cylinder, or
-    # a path to an MJCF file. pick_place is the arm on its desk.
-    display_scene: str = "pick_place"
-    # During lerobot-calibrate, a MuJoCo window showing the pose each step asks
-    # for (macOS: run under mjpython).
+    # Mirror every command to a sim server, so the sim arm moves with the real
+    # one: mujoco (`kikobot-sim-server`), isaac (`isaac/kikobot_isaac_server.py`)
+    # or none. If the server is not running, the real arm still runs.
+    sim_backend: str = "mujoco"
+    sim_host: str = "127.0.0.1"
+    # None: the backend's default port (5556 mujoco, 5557 isaac).
+    sim_port: int | None = None
+    sim_timeout_s: float = 0.5
+
+    @property
+    def sim_address(self) -> tuple[str, int]:
+        default = ISAAC_DEFAULT_PORT if self.sim_backend == "isaac" else DEFAULT_PORT
+        return self.sim_host, self.sim_port if self.sim_port is not None else default
+    # During lerobot-calibrate, pose the sim server's arm the way each step asks for.
     calibration_view: bool = True
 
 

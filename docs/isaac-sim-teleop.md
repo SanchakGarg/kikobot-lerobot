@@ -23,21 +23,28 @@ Run from the repo:
 
 ```powershell
 cd $W\kikobot-lerobot
-& "$I\python.exe" isaac\kikobot_isaac_server.py
+& "$I\python.exe" isaac\kikobot_isaac_server.py --scene pick_place
 ```
 
-Leave it running. It serves one LeRobot client at a time, and a new client
-picks up where the last one left off. The scene is only rebuilt if the
-camera size, fps or scene name changes. Stop it with Ctrl+C or by closing the
-Isaac Sim window.
+Leave it running. The scene, cameras and image size are chosen here, when
+the server starts; restart it to change them. Physics runs in real time
+from the start, whether or not a client is connected. It serves one LeRobot
+client at a time, and a new client picks up where the last one left off.
+Stop it with Ctrl+C or by closing the Isaac Sim window.
 
 Server options (`--name value`):
 
 | Option | Default | What it does |
 |---|---|---|
+| `--scene` | `pick_place` | `pick_place` (red cube), `cylinder` (orange cylinder lying down), `desk_sort` ([desk sorting station](#desk-sorting-station)), `empty` (just the arm) |
+| `--cameras` | `record` | Cameras to render: `record` (front) and/or `overhead` (straight down on the desk), e.g. `--cameras record overhead` |
+| `--width` / `--height` | 640 / 480 | Camera resolution. The robot's `--robot.width/height` must match |
+| `--seed` | random | Fixes where things spawn: the same seed gives the same sequence of scenes |
+| `--physics-dt` | 0.002 | Physics step, seconds |
+| `--render-hz` | 30 | How often the window is redrawn |
 | `--headless` | off | No window. Saves about 1 GB of VRAM. Camera images are still rendered. |
 | `--livestream` | off | With `--headless`: watch in the Isaac Sim WebRTC Streaming Client |
-| `--bind` | `tcp://127.0.0.1:5556` | Address to listen on |
+| `--bind` | `tcp://127.0.0.1:5557` | Address to listen on (the MuJoCo server has 5556, so both can run) |
 | `--usd` | `models/usd/kikobot.usd` | The arm, from `isaac/convert_mjcf.py` |
 | `--integrator` | `implicitfast` | Newton's MuJoCo-Warp integrator: `euler`, `rk4`, `implicit`, `implicitfast` |
 | `--kp` / `--kd` | 200 / 3 | Arm joint stiffness (N·m/rad) and damping (N·m·s/rad) |
@@ -52,7 +59,7 @@ Plug the controller in first. In a second terminal:
 ```powershell
 & "$V\lerobot-teleoperate.exe" `
   --robot.type=kikobot_isaac `
-  --teleop.type=kikobot_gamepad
+  --teleop.type=kikobot_gamepad --fps=60
 ```
 
 Add `--display_data=true` to watch the `record` camera and the joint values
@@ -80,23 +87,36 @@ the [main README](../README.md#4-gamepad-controls).
 
 | Option | Default | What it does |
 |---|---|---|
-| `host` / `port` | `127.0.0.1` / `5556` | Where the server is |
-| `scene` | `pick_place` | `pick_place` (red cube), `cylinder` (orange cylinder lying down), `desk_sort` ([desk sorting station](#desk-sorting-station)), `empty` (just the arm) |
-| `fps` | 30 | Control rate. Each tick advances physics by exactly 1/fps |
-| `width` / `height` | 640 / 480 | `record` camera resolution |
-| `camera_names` | `[record]` | `record` (front) and/or `overhead` (straight down on the desk), e.g. `'[record,overhead]'` |
-| `seed` | random | Fixes where the cube and pad spawn: the same seed gives the same sequence |
+| `host` / `port` | `127.0.0.1` / `5557` | Where the server is |
+| `camera_names` | `[record]` | Which of the server's `--cameras` to observe, e.g. `'[record,overhead]'` |
+| `width` / `height` | 640 / 480 | Must match the server's `--width` / `--height` |
 | `image_encoding` | `raw` | `raw`: exact pixels, for one machine. `jpeg`: about 20× smaller, for a network |
 | `reset_on_connect` | true | Start each run from a fresh scene |
+| `max_velocity_deg_s` | 180 | Joint speed cap, the same as the real arm's |
 | `timeout_s` / `connect_timeout_s` | 10 / 120 | How long to wait for the server. The first connect compiles shaders |
-| `motion.*` | as on the real arm | Input shaping and speed limits, same as `kikobot_sim` ([README §7](../README.md#7-tune-the-motion-input-shaping)) |
 
-For example, the cylinder task with a fixed seed:
+The scene and seed are server options. For example, the cylinder task with
+a fixed seed:
 
 ```powershell
-& "$V\lerobot-teleoperate.exe" --robot.type=kikobot_isaac `
-  --robot.scene=cylinder --robot.seed=7 --teleop.type=kikobot_gamepad
+& "$I\python.exe" isaac\kikobot_isaac_server.py --scene cylinder --seed 7
+& "$V\lerobot-teleoperate.exe" --robot.type=kikobot_isaac --teleop.type=kikobot_gamepad --fps=60
 ```
+
+## Mirror the real arm into Isaac Sim
+
+The real arm can show its every move in Isaac Sim instead of MuJoCo: start
+the Isaac server, then drive the arm with `--robot.sim_backend=isaac`:
+
+```powershell
+& "$V\lerobot-teleoperate.exe" --robot.type=kikobot_follower `
+  --robot.port=COM3 --robot.id=kikobot --robot.sim_backend=isaac `
+  --teleop.type=kikobot_gamepad --fps=60
+```
+
+Each goal written to the servos is sent to the server on the same tick, so
+the Isaac arm and the real one move together. If the server is not
+running, the real arm still runs and the log says so.
 
 ## Desk sorting station
 
@@ -113,12 +133,13 @@ Every reset (and the gamepad's Back button) draws a new desk. **Pens can
 land on top of each other**: about a third of the writing tools are dropped
 across ones already on the desk (up to three layers), then the server runs
 0.6 s of physics with the arm held still so the piles settle before the
-episode starts (`--settle-s` on the server). The same `--robot.seed` gives
+episode starts (`--settle-s` on the server). The same `--seed` gives
 the same sequence of desks.
 
 ```powershell
+& "$I\python.exe" isaac\kikobot_isaac_server.py --scene desk_sort --cameras record overhead
 & "$V\lerobot-teleoperate.exe" --robot.type=kikobot_isaac `
-  --robot.scene=desk_sort --robot.camera_names='[record,overhead]' `
+  --robot.camera_names='[record,overhead]' `
   --teleop.type=kikobot_gamepad --display_data=true
 ```
 
@@ -151,20 +172,25 @@ tray are always procedural, with box-wall colliders, so items can drop inside th
 
 ## How it runs
 
-- **Lockstep.** The sim only moves when LeRobot sends an action: one
-  control tick is 17 physics steps of 1/(30×17) s. If the GPU is slow, the
-  episode slows down, but the motion does not change.
-- **Same motion as the other backends.** The same `MotionShaper` as the
-  MuJoCo sim and the real arm runs before every physics step, so the arm
-  accelerates and settles the same way. Your `--robot.motion.*` settings are
-  sent to the server when you connect.
+- **Real time.** Physics steps on wall-clock time (2 ms steps by default),
+  whatever the client does, and the server answers requests between steps.
+  The log prints the real-time factor every 10 s. If the GPU cannot keep up,
+  the sim drops the time rather than racing to catch up.
+- **No filter on the motion.** A `command` sets the joint drive targets and
+  physics takes the arm there, as the real servos do with the same goal.
+  The robot only caps joint speed (`--robot.max_velocity_deg_s`), the same
+  way as the real arm, so the sim, Isaac and the real arm get identical
+  commands.
 - **Newton physics.** Newton runs MuJoCo-Warp on the GPU with the
   `<option>` settings from `robot.xml` (elliptic friction cones, Newton
   solver). Contacts, friction and the servo model match the MuJoCo scene
   closely, but not bit for bit: Newton and MuJoCo are different builds of
   the solver, and the meshes go through USD.
 - **Cameras.** The `record` camera is rendered by Isaac Sim's RTX renderer.
-  It sits where it does in `pick_place_scene.xml`: 0.78 m in front, 0.34 m
-  up, aimed at the base, with a 48° vertical field of view. A policy trained
-  on Isaac images sees the same framing as the MuJoCo camera, but more
-  realistic lighting.
+  It sits where the MuJoCo scene's does: 0.78 m in front, 0.34 m up, aimed
+  at the base, with a 48° vertical field of view. A policy trained on Isaac
+  images sees the same framing as the MuJoCo camera, but more realistic
+  lighting.
+- **Protocol.** The same as `kikobot-sim-server`'s
+  (`lerobot_robot_kikobot/protocol.py`), so `kikobot_isaac`, `kikobot_sim`
+  and the real arm's mirror share one client.

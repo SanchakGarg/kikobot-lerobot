@@ -60,9 +60,10 @@ Tips for a good dataset:
   at 30–50 and gets reliable with more.
 - **Add to an existing dataset** by running the same command with
   `--resume=true`.
-- **A repeatable set of starting positions:** add `--robot.seed=0`.
-- **Other tasks:** `--robot.scene=cylinder` (stand the cylinder up on the
-  pad) with its own `--dataset.repo_id` and `--dataset.single_task`.
+- **A repeatable set of starting positions:** start the server with `--seed 0`.
+- **Other tasks:** restart the server with `--scene cylinder` (stand the
+  cylinder up on the pad) and use its own `--dataset.repo_id` and
+  `--dataset.single_task`.
 
 Recording on a different machine from the server (see
 [setup](isaac-sim-setup.md#remote-server-optional))? Add
@@ -86,7 +87,7 @@ actions alone reproduce the demo:
 ```
 
 The arm moves the same way. The cube may land somewhere else, because a
-replay spawns a new scene. Add the recording's `--robot.seed` to match it.
+replay spawns a new scene. Start the server with the recording's `--seed` to match it.
 
 ## 3. Train
 
@@ -145,7 +146,7 @@ take over with the sticks:
 & "$V\lerobot-rollout.exe" `
   --strategy.type=episodic `
   --policy.path=outputs/train/act_kikobot_isaac/checkpoints/last/pretrained_model `
-  --robot.type=kikobot_isaac --robot.seed=1000 `
+  --robot.type=kikobot_isaac `
   --teleop.type=kikobot_gamepad `
   --dataset.repo_id=local/eval_act_kikobot_isaac `
   --dataset.root=datasets/eval_act_kikobot_isaac `
@@ -155,8 +156,8 @@ take over with the sticks:
 ```
 
 Count the successes while it runs, or afterwards with `lerobot-dataset-viz`.
-With a fixed `--robot.seed`, two policies are scored on the same cube and pad
-positions.
+With the server started with a fixed `--seed` (e.g. `--seed 1000`), two
+policies are scored on the same cube and pad positions.
 
 ## 5. Run the policy on the real arm
 

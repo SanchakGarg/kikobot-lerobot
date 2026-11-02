@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 # A hyphen here would silently break discovery.
 name = "lerobot_robot_kikobot"
 version = "0.1.0"
-description = "Kiko-Bot 6-DOF arm for LeRobot: MuJoCo and Isaac Sim, real Feetech arm and 6-DOF gamepad IK teleop"
+description = "Kiko-Bot 6-DOF arm for LeRobot: a MuJoCo sim server, the real Feetech arm and 6-DOF gamepad IK teleop"
 readme = "README.md"
 requires-python = ">=3.12"
 # lerobot is installed from source first (see README), so it is not pinned here.
@@ -23,6 +23,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+
+[project.scripts]
+kikobot-sim-server = "lerobot_robot_kikobot.sim_server:main"
 
 [tool.setuptools.packages.find]
 include = ["lerobot_robot_kikobot*"]

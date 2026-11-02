@@ -2,8 +2,16 @@
 
 Same action and observation keys as the sim (`J1.pos`..`J6.pos` in degrees,
 `gripper.pos` in % open), so a teleop, dataset or policy works on either.
-`send_action` only hands the target to `ServoStreamer`, which streams shaped
-goals to the servos at `stream_hz` from its own thread.
+
+It drives the servos the way LeRobot's SO-101 follower does: `send_action`
+writes the goal straight to every servo in one sync-write packet (no reply,
+well under a millisecond), and `get_observation` reads them back in one sync
+read. Nothing filters or delays the goal; only a speed cap (`RateLimiter`)
+stops a target that jumps from being reached at the servo's full speed.
+
+The same command goes to a sim server (`--robot.sim_backend`) on the same
+tick, so the sim arm and the real arm move together. It is sent from a
+thread of its own (`SimMirror`): the real arm never waits for the sim.
 """
 
 from __future__ import annotations
@@ -24,8 +32,7 @@ from lerobot.robots import Robot
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
 from .calibration import fit_range, is_range_calibrated
-from .config import ARM_JOINTS, KikobotFollowerConfig
-from .display import DISPLAY_MODES, SimDisplay
+from .config import ARM_JOINTS, SIM_BACKENDS, KikobotFollowerConfig
 from .feetech import (
     ADDR_ACCELERATION,
     ADDR_D_COEFFICIENT,
@@ -40,8 +47,8 @@ from .feetech import (
 )
 from .kinematics import ArmKinematics, GravityModel
 from .paths import home_pose_path
-from .motion import MotionShaper, SagCorrector
-from .streamer import ServoStreamer
+from .motion import RateLimiter, SagCorrector
+from .sim_client import SimClient, SimMirror
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +61,8 @@ DEFAULT_HOMING = RESOLUTION // 2
 # calibration makes.
 CENTER_SPEED_DEG_S = 25.0
 CENTER_RATE_HZ = 50.0
+# Position reads in a row that may fail before the arm is declared lost.
+MAX_READ_FAILURES = 25
 
 # Which physical way each joint's min and max lie, read off the MuJoCo model.
 # "Front" is the way the arm reaches in the ready pose; stand behind the base
@@ -84,8 +93,8 @@ class KikobotFollower(Robot):
         self.motor_ids = dict(zip(ARM_JOINTS, config.servo_ids))
         if config.gripper_id is not None:
             self.motor_ids["gripper"] = config.gripper_id
-        if config.display not in DISPLAY_MODES:
-            raise ValueError(f"display must be one of {DISPLAY_MODES}, not {config.display!r}.")
+        if config.sim_backend not in SIM_BACKENDS:
+            raise ValueError(f"sim_backend must be one of {SIM_BACKENDS}, not {config.sim_backend!r}.")
         for field_name in ("inverted_joints", "sag_joints"):
             unknown = set(getattr(config, field_name)) - set(self.motor_ids)
             if unknown:
@@ -98,17 +107,27 @@ class KikobotFollower(Robot):
             self.lower = np.append(self.lower, ends.min())
             self.upper = np.append(self.upper, ends.max())
         self.bus: FeetechBus | None = None
-        self.streamer: ServoStreamer | None = None
-        self.cameras = make_cameras_from_configs(config.cameras)
+        # Last goal written to the servos (radians, J1..J6 then the gripper),
+        # without the sag correction. None until torque is on: calibration only.
+        self._command: np.ndarray | None = None
         self._target: np.ndarray | None = None
+        self._present: np.ndarray | None = None
+        self._limiter = RateLimiter(math.radians(config.max_velocity_deg_s), math.radians(config.soft_start_deg_s))
+        self._sag: SagCorrector | None = None
+        self._read_failures = 0
+        self._last_read_t: float | None = None
+        # The sim server mirror, and when it last failed (warned at most every 5 s).
+        self._sim: SimMirror | None = None
+        self._sim_warned_t = -math.inf
+        self._sag_warned_t = -math.inf
+        self.cameras = make_cameras_from_configs(config.cameras)
         self._last_gripper_pct = 100.0
-        self._display: SimDisplay | None = None
         # The bus during calibrate(), reopened there if it drops.
         self._cal_bus: FeetechBus | None = None
         # Joints calibrate() has moved to their centre and holds there.
         self._held: list[str] = []
-        # MuJoCo window showing the pose calibrate() is asking for.
-        self._cal_view: SimDisplay | None = None
+        # The sim server, posed the way calibrate() is asking for.
+        self._cal_view: SimClient | None = None
 
     # ---------------------------------------------------------------- features
 
@@ -153,7 +172,7 @@ class KikobotFollower(Robot):
             c = self._calib(motor)
             # Not clamped to the calibrated ends: an arm resting past one would
             # jump there at full speed. Targets are clipped in send_action, so
-            # the shaper eases it back in instead.
+            # the speed cap eases it back in instead.
             raw = c.homing_offset + angle * self._steps_per_rad(i, motor, c)
             out[self.motor_ids[motor]] = int(round(raw))
         return out
@@ -186,15 +205,23 @@ class KikobotFollower(Robot):
         return True
 
     def _open_cal_view(self) -> None:
-        if not self.config.calibration_view:
+        if not self.config.calibration_view or self.config.sim_backend == "none":
             return
+        cfg = self.config
+        client = SimClient(*cfg.sim_address, cfg.sim_timeout_s)
         try:
-            self._cal_view = SimDisplay("mujoco", self.config.display_scene)
-        except Exception as exc:  # e.g. macOS without mjpython, or no display.
-            logger.warning("No MuJoCo calibration view (%s); prompts only.", exc)
+            client.hello()
+            self._cal_view = client
+            print(f"The sim server's window shows each pose to match ({client.address}).")
+        except Exception as exc:
+            client.close()
+            logger.warning(
+                "No calibration view (%s). Start the sim server first to see each pose; "
+                "the prompts alone work too.", exc,
+            )
 
     def _show(self, motor: str | None = None, angle: float = 0.0, q: np.ndarray | None = None) -> None:
-        """Pose the view: every joint at its centre except `motor` at `angle`, or `q`."""
+        """Pose the sim arm: every joint at its centre except `motor` at `angle`, or `q`."""
         if self._cal_view is None:
             return
         if q is None:
@@ -202,7 +229,16 @@ class KikobotFollower(Robot):
             if motor is not None:
                 q[list(self.motor_ids).index(motor)] = angle
         pct = self._gripper_pct(q[6]) if len(q) > len(ARM_JOINTS) else 100.0
-        self._cal_view.update(q, pct, q)
+        try:
+            self._cal_view.call({
+                "cmd": "pose",
+                "q_deg": np.rad2deg(q[: len(ARM_JOINTS)]).tolist(),
+                "gripper_pct": float(np.clip(pct, 0.0, 100.0)),
+            })
+        except Exception as exc:
+            logger.warning("Calibration view lost (%s); prompts only from here.", exc)
+            self._cal_view.close()
+            self._cal_view = None
 
     def _end_names(self, i: int, motor: str) -> tuple[str, str]:
         if motor == "gripper":
@@ -392,9 +428,8 @@ class KikobotFollower(Robot):
         to_zero = motors if only == "zero" else []
         if to_zero:
             motors = []
-        if self.streamer is not None:
-            self.streamer.stop()
-            self.streamer = None
+        # Stop driving the servos; calibration only reads them.
+        self._command = None
         own_bus = self.bus is None
         cfg = self.config
         self._cal_bus = self.bus or FeetechBus(cfg.port, cfg.baudrate, list(self.motor_ids.values()))
@@ -550,20 +585,21 @@ class KikobotFollower(Robot):
 
     # -------------------------------------------------------------- connection
 
-    def _start_stream(self) -> None:
+    def _hold_present(self) -> None:
         cfg = self.config
         # Goal = where the arm is before torque comes on, so nothing jumps.
         present_raw = self.bus.sync_read_positions()
         self.bus.sync_write_goals(present_raw)
         self.bus.set_torque(True)
         present = self._from_raw(present_raw)
-        self.streamer = ServoStreamer(
-            self.bus,
-            MotionShaper(len(self.motor_ids), cfg.motion),
-            self._to_raw,
-            self._from_raw,
-            cfg.stream_hz,
-            cfg.read_every,
+        now = time.perf_counter()
+        self._present = present.copy()
+        self._command = present.copy()
+        self._target = present.copy()
+        self._limiter.reset(present, now)
+        self._read_failures = 0
+        self._last_read_t = now
+        self._sag = (
             SagCorrector(
                 [m in cfg.sag_joints for m in self.motor_ids],
                 cfg.sag_time_constant_s,
@@ -571,10 +607,46 @@ class KikobotFollower(Robot):
                 GravityModel(),
             )
             if cfg.sag_joints
-            else None,
+            else None
         )
-        self.streamer.start(present)
-        self._target = present.copy()
+
+    def _connect_sim(self) -> None:
+        cfg = self.config
+        client = SimClient(*cfg.sim_address, cfg.sim_timeout_s)
+        try:
+            info = client.hello()
+        except Exception as exc:
+            client.close()
+            logger.warning(
+                "No sim server at %s (%s): the real arm runs without the sim mirror. "
+                "Start the sim server first, or pass --robot.sim_backend=none.", client.address, exc,
+            )
+            return
+        logger.info("Mirroring the arm to the sim server at %s (scene %s).", client.address, info["scene"])
+        try:
+            # Start the sim where the real arm is, before anything moves.
+            client.call(self._mirror_header("pose", self._command))
+        except Exception as exc:
+            logger.warning("Sim mirror: %s", exc)
+        self._sim = SimMirror(client)
+
+    def _mirror_header(self, cmd: str, q: np.ndarray) -> dict[str, Any]:
+        return {
+            "cmd": cmd,
+            "q_deg": np.rad2deg(q[: len(ARM_JOINTS)]).tolist(),
+            "gripper_pct": self._last_gripper_pct,
+        }
+
+    def _mirror(self, q: np.ndarray) -> None:
+        """Hand the command the servos got to the mirror thread. Never waits."""
+        if self._sim is None:
+            return
+        self._sim.send(self._mirror_header("command", q))
+        if self._sim.error is not None:
+            now = time.perf_counter()
+            if now - self._sim_warned_t > 5.0:
+                self._sim_warned_t = now
+                logger.warning("Sim mirror: %s (the real arm carries on)", self._sim.error)
 
     @property
     def is_connected(self) -> bool:
@@ -604,7 +676,7 @@ class KikobotFollower(Robot):
                 if missing:
                     logger.warning("Not calibrated, using mid-scale: %s", ", ".join(missing))
             self.configure()
-            self._start_stream()
+            self._hold_present()
         except Exception:
             self.bus.close()
             self.bus = None
@@ -612,20 +684,13 @@ class KikobotFollower(Robot):
 
         for cam in self.cameras.values():
             cam.connect()
-        if cfg.display != "none":
-            self._display = SimDisplay(cfg.display, cfg.display_scene)
-        logger.info(
-            "%s connected on %s; streaming at %.0f Hz with a %s shaper at %.1f Hz.",
-            self, cfg.port, cfg.stream_hz, cfg.motion.shaper_type, cfg.motion.shaper_freq_hz,
-        )
+        if cfg.sim_backend != "none":
+            self._connect_sim()
+        logger.info("%s connected on %s.", self, cfg.port)
 
     @check_if_not_connected
     def disconnect(self) -> None:
-        if self.streamer is not None:
-            self.streamer.stop()
-            if self.streamer.late_ticks:
-                logger.info("Servo stream ran late on %d ticks.", self.streamer.late_ticks)
-            self.streamer = None
+        self._command = None
         try:
             if self.config.disable_torque_on_disconnect:
                 self.bus.set_torque(False)
@@ -634,9 +699,9 @@ class KikobotFollower(Robot):
             self.bus = None
         for cam in self.cameras.values():
             cam.disconnect()
-        if self._display is not None:
-            self._display.close()
-            self._display = None
+        if self._sim is not None:
+            self._sim.close()
+            self._sim = None
         logger.info("%s disconnected.", self)
 
     # --------------------------------------------------------------------- i/o
@@ -649,14 +714,33 @@ class KikobotFollower(Robot):
         open_, closed = np.deg2rad([self.config.gripper_open_deg, self.config.gripper_closed_deg])
         return float(closed + np.clip(pct, 0.0, 100.0) / 100.0 * (open_ - closed))
 
-    def _require_stream(self) -> None:
-        if self.streamer is None:
+    def _require_torque(self) -> None:
+        if self._command is None:
             raise RuntimeError(f"{self} is connected for calibration only (torque off).")
+
+    def _read_present(self) -> np.ndarray:
+        """Measured joints. A corrupted reply now and then is normal on a busy
+        Feetech bus: it reuses the last reading, and only a run of them raises."""
+        try:
+            present = self._from_raw(self.bus.sync_read_positions())
+        except ConnectionError as exc:
+            self._read_failures += 1
+            if self._read_failures >= MAX_READ_FAILURES:
+                raise ConnectionError(f"{MAX_READ_FAILURES} position reads in a row failed: {exc}") from exc
+            logger.debug("Skipped a position read: %s", exc)
+            return self._present
+        self._read_failures = 0
+        now = time.perf_counter()
+        if self._sag is not None:
+            self._sag.learn(self._command, present, now - self._last_read_t)
+        self._last_read_t = now
+        self._present = present
+        return present
 
     @check_if_not_connected
     def get_observation(self) -> RobotObservation:
-        self._require_stream()
-        q = self.streamer.latest_present()
+        self._require_torque()
+        q = self._read_present()
         obs: dict[str, Any] = {f"{j}.pos": float(np.rad2deg(q[i])) for i, j in enumerate(ARM_JOINTS)}
         # No gripper servo: report the commanded opening so the key stays valid.
         obs["gripper.pos"] = (
@@ -664,15 +748,11 @@ class KikobotFollower(Robot):
         )
         for key, cam in self.cameras.items():
             obs[key] = cam.read_latest() if hasattr(cam, "read_latest") else cam.async_read()
-        if self._display is not None:
-            commanded = self.streamer.commanded
-            goal = commanded + self.streamer.correction if len(self.streamer.correction) else None
-            self._display.update(commanded, self._last_gripper_pct, q, goal)
         return obs
 
     @check_if_not_connected
     def send_action(self, action: RobotAction) -> RobotAction:
-        self._require_stream()
+        self._require_torque()
         target = self._target.copy()
         for i, j in enumerate(ARM_JOINTS):
             if f"{j}.pos" in action:
@@ -681,10 +761,25 @@ class KikobotFollower(Robot):
             self._last_gripper_pct = float(np.clip(action["gripper.pos"], 0.0, 100.0))
             if self.config.gripper_id is not None:
                 target[6] = self._gripper_angle(self._last_gripper_pct)
-        target = np.clip(target, *self._reachable())
-        self._target = target
-        self.streamer.set_target(target)
+        self._target = np.clip(target, *self._reachable())
 
-        sent = {f"{j}.pos": float(np.rad2deg(target[i])) for i, j in enumerate(ARM_JOINTS)}
+        command = self._limiter.step(self._target, time.perf_counter())
+        goal = command
+        if self._sag is not None:
+            # The goal carries the droop correction; the command stays the
+            # motion itself, for the sim and the observation.
+            goal = command + self._sag.correction(command)
+            if self._sag.capped.any() and time.perf_counter() - self._sag_warned_t > 30.0:
+                self._sag_warned_t = time.perf_counter()
+                logger.warning(
+                    "Sag correction at its cap on joint(s) %s: the servo cannot hold the "
+                    "load there. Raise --robot.sag_max_deg, or see the README on sag.",
+                    [m for m, c in zip(self.motor_ids, self._sag.capped) if c],
+                )
+        self.bus.sync_write_goals(self._to_raw(goal))
+        self._command = command
+        self._mirror(command)
+
+        sent = {f"{j}.pos": float(np.rad2deg(command[i])) for i, j in enumerate(ARM_JOINTS)}
         sent["gripper.pos"] = self._last_gripper_pct
         return sent
