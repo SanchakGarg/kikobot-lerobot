@@ -17,7 +17,7 @@ from collections.abc import Callable
 import numpy as np
 
 from .feetech import FeetechBus
-from .motion import MotionShaper
+from .motion import MotionShaper, SagCorrector
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ class ServoStreamer:
         from_raw: Callable[[dict[int, int]], np.ndarray],
         rate_hz: float,
         read_every: int,
+        sag: SagCorrector | None = None,
     ):
         self.bus = bus
         self.shaper = shaper
@@ -41,6 +42,8 @@ class ServoStreamer:
         self.from_raw = from_raw
         self.period = 1.0 / rate_hz
         self.read_every = max(1, read_every)
+        self.sag = sag
+        self._bias = np.zeros(0)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -56,6 +59,7 @@ class ServoStreamer:
         self.shaper.reset(initial, now)
         self.present = initial.copy()
         self.commanded = initial.copy()
+        self._bias = np.zeros_like(initial)
         self._thread = threading.Thread(target=self._run, name="kikobot-servo-stream", daemon=True)
         self._thread.start()
 
@@ -79,6 +83,7 @@ class ServoStreamer:
         tick = 0
         read_failures = 0
         next_t = time.perf_counter()
+        last_read_t = next_t
         try:
             while not self._stop.is_set():
                 now = time.perf_counter()
@@ -88,7 +93,9 @@ class ServoStreamer:
                     self.shaper.set_target(*new)
 
                 command = self.shaper.step(now)
-                self.bus.sync_write_goals(self.to_raw(command))
+                # The goal carries the droop correction; `commanded` stays the
+                # motion itself, for the display and the observation.
+                self.bus.sync_write_goals(self.to_raw(command + self._bias))
                 self.commanded = command
 
                 if tick % self.read_every == 0:
@@ -97,6 +104,9 @@ class ServoStreamer:
                         with self._lock:
                             self.present = present
                         read_failures = 0
+                        if self.sag is not None:
+                            self._bias = self.sag.update(command, present, now - last_read_t)
+                        last_read_t = now
                     except ConnectionError as exc:
                         # A corrupted reply now and then is normal on a busy
                         # Feetech bus; only a run of them is a real fault.

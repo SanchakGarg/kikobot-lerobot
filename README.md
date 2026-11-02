@@ -177,7 +177,7 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 | `lerobot_robot_kikobot/calibration.py` | Fits each joint's min/middle/max readings onto the model's range. |
 | `scripts/measure_resonance.py` | Measures a joint's ringing frequency to tune the shaper. |
 | `udev/99-kikobot.rules` | Ubuntu: serial port permissions and a stable `/dev/kikobot` name. |
-| `tests/` | Motion-shaper and calibration tests (no hardware needed). |
+| `tests/` | Motion-shaper, droop-correction and calibration tests (no hardware needed). |
 
 ---
 
@@ -505,6 +505,19 @@ a second rerun recording with the raw observation and action values and the
 camera images; in the rerun viewer, switch between the two recordings in
 the left panel.
 
+<a id="sag"></a>**Sag under load.** A position servo only pushes back in
+proportion to how far it is off its goal, so a heavily loaded joint (J2,
+which lifts the whole arm) settles a few degrees low. While the arm holds
+still, the goal of each joint in `--robot.sag_joints` (default `[J2]`) is
+shifted until its measured angle sits on the commanded one; in rerun the
+two lines then meet. It builds up over about `sag_time_constant_s` (0.5 s)
+after each stop and is not learned during moves, so it adds no overshoot.
+Add J3 if it droops too: `--robot.sag_joints='[J2,J3]'`. If the arm sags
+more than `sag_max_deg` (15°), or the servo gets hot, the joint needs more
+torque than the servo has: a stronger servo (STS3250 instead of STS3215),
+a counterbalance spring, or a lighter forearm and gripper. Check the 12 V
+supply too: a sagging supply weakens every servo.
+
 <a id="joint-direction"></a>**Joint direction.** Some servos are mounted so
 that they turn opposite to the model. `--robot.inverted_joints` lists those
 joints and defaults to `[J5]`, which is how the Kiko-Bot is built. To change
@@ -529,6 +542,8 @@ Follower options (`--robot.<name>=`):
 | `stream_hz` | `100` | Goal stream rate |
 | `read_every` | `3` | Read positions every Nth stream tick (≈33 Hz) |
 | `p_coefficient` / `d_coefficient` / `i_coefficient` | `16` / `32` / `0` | Servo position-loop gains |
+| `sag_joints` | `[J2]` | Joints whose droop under the arm's weight is corrected ([sag](#sag)); `'[]'` for none |
+| `sag_time_constant_s` / `sag_max_deg` | `0.5` / `15` | How fast the correction builds up, and its cap |
 | `disable_torque_on_disconnect` | `false` | Off by default so the arm does not drop |
 | `display` | `rerun` | Live view of the commanded (sim) motion: `rerun`, `mujoco`, `both`, `none` ([live view](#live-view)) |
 | `calibration_view` | `true` | MuJoCo window during calibration showing the pose to match |
@@ -630,6 +645,7 @@ all three with Python 3.11+.
 | Real arm stops short of, or overshoots, the sim's pose | Redo [calibration](#calibration) with each joint pushed fully to the ends the model shows. |
 | Arm wobbles after stopping | Measure and set `shaper_freq_hz` ([7](#7-tune-the-motion-input-shaping)), or lower `max_acceleration_deg_s2`. |
 | Arm feels sluggish | Raise `max_velocity_deg_s` / `max_acceleration_deg_s2`, or use `shaper_type=zv`. |
+| J2 (or another joint) hangs lower than the sim | Droop under load: corrected for `--robot.sag_joints` (default `[J2]`) while the arm holds still ([sag](#sag)). Add others, e.g. `'[J2,J3]'`. |
 | Servo buzzes while holding | Lower `--robot.p_coefficient` (try 12). |
 | `Servo stream stopped` | The bus failed repeatedly: check power and cable. The log has the cause. |
 

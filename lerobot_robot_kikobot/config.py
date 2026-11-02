@@ -98,6 +98,14 @@ class KikobotFollowerConfig(RobotConfig):
     i_coefficient: int = 0
     d_coefficient: int = 32
 
+    # Droop correction: joints that sag under the arm's weight settle short of
+    # their goal. While the arm holds still, their goal is shifted until the
+    # measured angle sits on the commanded one. `[]` turns it off.
+    sag_joints: tuple[str, ...] = ("J2",)
+    # How fast the correction builds up, and the most it may add.
+    sag_time_constant_s: float = 0.5
+    sag_max_deg: float = 15.0
+
     # Dropping torque lets a gravity-loaded arm fall, so the default keeps it on.
     disable_torque_on_disconnect: bool = False
     # Live view of the commanded (sim) motion: `rerun` (default), `mujoco`

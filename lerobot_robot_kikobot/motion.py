@@ -207,3 +207,35 @@ class MotionShaper:
         ramp = 1.0 if cfg.soft_start_s <= 0 else min(1.0, (t - self._start_t) / cfg.soft_start_s)
         scale = cfg.soft_start_fraction + (1.0 - cfg.soft_start_fraction) * ramp
         return self.shaper(t, self.follower.step(dt, t, scale))
+
+
+class SagCorrector:
+    """Cancels a joint's steady droop under load, like a slow integral term.
+
+    A position servo pushes back in proportion to how far it is off its goal,
+    so a heavily loaded joint (J2) settles short of it. While the commanded
+    motion is nearly at rest, this measures that gap and shifts the goal by
+    it, a little at a time, until the measured angle sits on the commanded
+    one. It does not learn during moves, where the gap is tracking lag, not
+    droop, and would make the joint overshoot when it stops.
+    """
+
+    # Commanded speed below which the arm counts as holding still.
+    REST_SPEED_RAD_S = math.radians(5.0)
+
+    def __init__(self, mask: np.ndarray, time_constant_s: float, max_rad: float):
+        self.mask = np.asarray(mask, dtype=float)
+        self.time_constant_s = time_constant_s
+        self.max_rad = max_rad
+        self.bias = np.zeros(len(self.mask))
+        self._last_command: np.ndarray | None = None
+
+    def update(self, command: np.ndarray, present: np.ndarray, dt: float) -> np.ndarray:
+        """Learn from one measurement; return the goal offset to add (radians)."""
+        if self._last_command is not None and dt > 0 and self.time_constant_s > 0:
+            speed = np.abs(command - self._last_command) / dt
+            at_rest = (speed < self.REST_SPEED_RAD_S) * self.mask
+            self.bias += at_rest * (command - present) * min(dt / self.time_constant_s, 1.0)
+            np.clip(self.bias, -self.max_rad, self.max_rad, out=self.bias)
+        self._last_command = command.copy()
+        return self.bias

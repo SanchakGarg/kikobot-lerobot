@@ -40,7 +40,7 @@ from .feetech import (
 )
 from .kinematics import ArmKinematics
 from .paths import home_pose_path
-from .motion import MotionShaper
+from .motion import MotionShaper, SagCorrector
 from .streamer import ServoStreamer
 
 logger = logging.getLogger(__name__)
@@ -86,9 +86,10 @@ class KikobotFollower(Robot):
             self.motor_ids["gripper"] = config.gripper_id
         if config.display not in DISPLAY_MODES:
             raise ValueError(f"display must be one of {DISPLAY_MODES}, not {config.display!r}.")
-        unknown = set(config.inverted_joints) - set(self.motor_ids)
-        if unknown:
-            raise ValueError(f"inverted_joints {sorted(unknown)} not in {list(self.motor_ids)}.")
+        for field_name in ("inverted_joints", "sag_joints"):
+            unknown = set(getattr(config, field_name)) - set(self.motor_ids)
+            if unknown:
+                raise ValueError(f"{field_name} {sorted(unknown)} not in {list(self.motor_ids)}.")
         self.kin = ArmKinematics()
         self.lower = self.kin.lower.copy()
         self.upper = self.kin.upper.copy()
@@ -506,6 +507,13 @@ class KikobotFollower(Robot):
             self._from_raw,
             cfg.stream_hz,
             cfg.read_every,
+            SagCorrector(
+                [m in cfg.sag_joints for m in self.motor_ids],
+                cfg.sag_time_constant_s,
+                math.radians(cfg.sag_max_deg),
+            )
+            if cfg.sag_joints
+            else None,
         )
         self.streamer.start(present)
         self._target = present.copy()
