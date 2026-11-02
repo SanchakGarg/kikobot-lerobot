@@ -138,14 +138,27 @@ running, the real arm still runs and the log says so.
 
 ## Desk sorting station
 
-`--robot.scene=desk_sort` puts a desk organiser in front of the arm:
+`--scene desk_sort` turns the arm's table into a stationery sorting
+station, the same in Isaac Sim and in MuJoCo (`kikobot-sim-server --scene
+desk_sort`): the stations and items are described once, in
+`lerobot_robot_kikobot/desk/`. Around the arm, inside its reach, there is a
+proper place for every kind of item:
 
-- a **pen cup** on the arm's right, for pens, pencils, markers and highlighters;
-- a **three-compartment tray** on its left, for the glue stick, tape roll,
-  scissors and eraser;
-- a random clutter between them: 3 to 8 writing tools and 1 to 4 other
-  supplies, each with a random colour, texture (stripes, bands, grip dots,
-  printed label, polka dots, ...) and finish, on a wood-grain desk top.
+| Station | Where | For |
+|---|---|---|
+| **Pen cup** (black) | front right | pens, pencils |
+| **Marker cup** (blue) | right | markers, highlighters |
+| **Tape peg** | back right | tape rolls: they drop over the post |
+| **Supply tray**, 3 compartments | front left | glue sticks, erasers, the sharpener, the paper clip box |
+| **Note mat** | left | sticky-note pads |
+| **Long tray** | back left | scissors, the ruler, the stapler |
+
+In front of the arm lies the clutter, drawn from a pool of 32 items (8 pens,
+4 pencils, 4 markers, 3 highlighters, 2 each of tape rolls, glue sticks,
+erasers and sticky-note pads, and a pair of scissors, a stapler, a ruler, a
+paper clip box and a sharpener): on average 9 writing tools and 5 other
+supplies, each with a random colour, texture (stripes, bands, grip dots,
+printed label, polka dots, ...) and finish, on the grey table.
 
 Every reset (and the gamepad's Back button) draws a new desk. **Pens can
 land on top of each other**: about a third of the writing tools are dropped
@@ -185,8 +198,8 @@ that kind is built procedurally. Server options:
 Assets are only used for their looks. Each one is turned so its longest
 side lies along the desk, scaled to the real size of that kind, and given a
 simple hidden collider (capsule, cylinder or box) fitted to it. Newton
-needs convex shapes, and asset colliders are made for PhysX. The pen cup and
-tray are always procedural, with box-wall colliders, so items can drop inside them.
+needs convex shapes, and asset colliders are made for PhysX. The stations are
+always procedural, with box-wall colliders, so items can drop inside them.
 
 ## How it runs
 

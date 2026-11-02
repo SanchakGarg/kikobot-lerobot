@@ -77,6 +77,7 @@ room = _load("kikobot_room", PKG / "env" / "room.py")
 # The desk sorting station (no Isaac Sim imports at module level either).
 desk_layout = _load("desk_layout", PKG / "desk" / "layout.py")
 _load("desk_textures", PKG / "desk" / "textures.py")
+_load("desk_meshes", PKG / "desk" / "meshes.py")
 desk_assets = _load("desk_assets", HERE / "desk_assets.py")
 room_usd = _load("room_usd", HERE / "room_usd.py")
 

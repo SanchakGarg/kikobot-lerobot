@@ -42,6 +42,9 @@ VIEWER_HZ = 60.0
 MAX_LAG_S = 0.05
 STATS_EVERY_S = 10.0
 
+# desk_sort: physics with the arm held at ready after each new desk, so
+# stacked pens drop and come to rest before the episode starts.
+SETTLE_S = 0.6
 # Objects respawn in a fan in front of the arm, within comfortable reach.
 SPAWN_RADIUS_M = (0.22, 0.32)
 SPAWN_HALF_ANGLE_RAD = math.radians(40.0)
@@ -86,9 +89,16 @@ class SimWorld:
         self._grip_closed, self._grip_open = m.actuator_ctrlrange[self._grip_act]
         self.lower = m.jnt_range[joints, 0].copy()
         self.upper = m.jnt_range[joints, 1].copy()
-        # The first free joint is the object to pick; the pad is a mocap body.
-        free = [j for j in range(m.njnt) if m.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE]
-        self._object_adr = int(m.jnt_qposadr[free[0]]) if free else None
+        self._desk = None
+        self._object_adr = None
+        if scene == "desk_sort":
+            from .desk.mujoco_desk import DeskRuntime  # noqa: PLC0415
+
+            self._desk = DeskRuntime(m)
+        else:
+            # The first free joint is the object to pick; the pad is a mocap body.
+            free = [j for j in range(m.njnt) if m.jnt_type[j] == mujoco.mjtJoint.mjJNT_FREE]
+            self._object_adr = int(m.jnt_qposadr[free[0]]) if free else None
         pad = id_of(mujoco.mjtObj.mjOBJ_BODY, "place_pad")
         self._pad_mocap = int(m.body_mocapid[pad]) if pad >= 0 else -1
 
@@ -135,14 +145,22 @@ class SimWorld:
         mujoco.mj_step(self.model, self.data, nstep=n)
 
     def reset(self, ready: np.ndarray | None = None) -> None:
-        """Arm to the ready pose, jaws open, object and pad respawned."""
+        """Arm to the ready pose, jaws open, object and pad respawned (or a new
+        desk), and new room lighting."""
         mujoco.mj_resetData(self.model, self.data)
         if self._lights is not None:
             self._lights.apply(
                 sample_lighting(self.rng, self.room) if self.randomize_lighting else fixed_lighting(self.room)
             )
-        self._respawn_objects()
-        self.pose(self.ready if ready is None else ready, 100.0)
+        ready = self.ready if ready is None else ready
+        if self._desk is not None:
+            # A new desk: which items, where, and how they look.
+            self._desk.reset(self.model, self.data, self.rng)
+            self.pose(ready, 100.0)
+            self.step(int(round(SETTLE_S / self.model.opt.timestep)))
+        else:
+            self._respawn_objects()
+        self.pose(ready, 100.0)
 
     def _sample_xy(self) -> np.ndarray:
         r = self.rng.uniform(*SPAWN_RADIUS_M)

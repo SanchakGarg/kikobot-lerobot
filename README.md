@@ -184,7 +184,7 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 | `lerobot_robot_kikobot/motion.py` | The speed cap and the droop (sag) correction. |
 | `lerobot_robot_kikobot/feetech.py` | Sync read/write over the Feetech bus. |
 | `lerobot_robot_kikobot/sim.py`, `isaac.py`, `follower.py`, `gamepad.py` | The four LeRobot devices. |
-| `lerobot_robot_kikobot/desk/` | The desk sorting station: layout sampler and textures, shared by the sims. |
+| `lerobot_robot_kikobot/desk/` | The desk sorting station, shared by the sims: stations, item pool and sampler, meshes, textures, and its MuJoCo builder. |
 | `isaac/` | Run with Isaac Sim's Python: the Isaac sim server (Newton) and the MJCF → USD converter. |
 | `scripts/slurm/train.sbatch` | Train a policy on a SLURM GPU node. |
 | `docs/` | Isaac Sim setup, teleop, record/train/evaluate and SLURM guides. |
@@ -353,6 +353,7 @@ off and its angle. So a policy trained here has seen many lightings;
 |---|---|
 | `pick_place` | A red 32 mm cube and a green place pad, respawned each reset |
 | `cylinder` | An orange cylinder lying on its side, and the pad |
+| `desk_sort` | A stationery sorting station: a pen cup, a marker cup, a tape peg, trays and a note mat around the arm, and 32 pens, pencils, markers, highlighters, tapes, glue sticks, erasers, sticky notes, scissors, a stapler, a ruler, ... of which a random selection (14 on average) lies in front of it, each with a random colour and texture, pens sometimes piled up ([details](docs/isaac-sim-teleop.md#desk-sorting-station)) |
 | `empty` | Nothing |
 
 Physics runs in real time from the start. A `command` from a client only
@@ -365,7 +366,7 @@ $V/lerobot-teleoperate --robot.type=kikobot_sim --teleop.type=kikobot_gamepad --
 
 `--display_data=true` shows the `record` camera in rerun.
 
-Server options: `--scene` (`pick_place`, `cylinder`, `empty`, or a path to
+Server options: `--scene` (`pick_place`, `cylinder`, `desk_sort`, `empty`, or a path to
 an MJCF file, used as is, without the lab), `--host` (`127.0.0.1`; `0.0.0.0`
 to accept other machines), `--port` (5556), `--no-viewer`, `--seed`,
 `--timestep` (0.002 s), `--fixed-lighting`.

@@ -16,6 +16,7 @@ REPO = Path(__file__).resolve().parent.parent
 FILES = {
     "desk_layout": REPO / "lerobot_robot_kikobot" / "desk" / "layout.py",
     "desk_textures": REPO / "lerobot_robot_kikobot" / "desk" / "textures.py",
+    "desk_meshes": REPO / "lerobot_robot_kikobot" / "desk" / "meshes.py",
     "desk_assets": REPO / "isaac" / "desk_assets.py",
 }
 
@@ -30,6 +31,7 @@ def _load(name):
 
 L = _load("desk_layout")
 T = _load("desk_textures")
+_load("desk_meshes")
 A = _load("desk_assets")
 
 
@@ -53,7 +55,8 @@ def test_one_placement_per_item_and_counts():
         assert [p.name for p in lay] == [it.name for it in pool]
         w = sum(p.active and L.KINDS[p.kind].writing for p in lay)
         s = sum(p.active and not L.KINDS[p.kind].writing for p in lay)
-        assert 1 <= w <= 8 and 1 <= s <= 4
+        # Asked for 6..14 and 3..8; a crowded desk can fit fewer writing tools.
+        assert 4 <= w <= 14 and 3 <= s <= 8
 
 
 def test_active_items_in_reach_and_parked_ones_under_the_table():
@@ -185,3 +188,32 @@ def test_stations_are_inside_the_table_and_reach():
         r = math.hypot(*st.xy)
         assert 0.15 < r < 0.33
         assert all(abs(c) + max(st.half) < 0.5 for c in st.xy)
+
+
+def test_every_kind_has_a_station():
+    for kind in L.KINDS:
+        st = L.station_for(kind)
+        assert kind in st.accepts
+    accepted = [k for st in L.STATIONS for k in st.accepts]
+    assert len(accepted) == len(set(accepted)) == len(L.KINDS)
+
+
+def test_stations_do_not_overlap():
+    for i, a in enumerate(L.STATIONS):
+        for b in L.STATIONS[i + 1 :]:
+            gap = math.dist(a.xy, b.xy) - math.hypot(*a.half) - math.hypot(*b.half)
+            assert gap > 0.005, (a.name, b.name)
+        assert math.hypot(*a.xy) - math.hypot(*a.half) > L.BASE_KEEPOUT_M
+
+
+def test_station_parts_sit_on_the_desk():
+    for st in L.STATIONS:
+        assert st.parts
+        for p in st.parts:
+            assert p.center[2] - p.half[2] >= -1e-9, (st.name, p.name)
+            assert p.shape in ("box", "cylinder", "tube")
+
+
+def test_tape_rolls_fit_over_the_peg():
+    post = next(p for p in L.TAPE_PEG.parts if p.name == "post")
+    assert L.KINDS["tape_roll"].ring_inner > post.half[0] + 0.002

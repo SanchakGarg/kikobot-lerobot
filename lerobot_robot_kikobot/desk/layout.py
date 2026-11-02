@@ -1,7 +1,10 @@
 """The desk sorting station: what is on the desk each episode, where, and how it looks.
 
-Pure numpy, no Isaac Sim: the server samples a layout here and the backend
-applies it. Tested in tests/test_desk_layout.py.
+Shared by both simulators: the MuJoCo scene (desk/mujoco_desk.py) and the
+Isaac Sim server (isaac/desk_assets.py) build the same stations from
+`STATIONS` and place the same items from `sample_desk`. Pure numpy, no
+package imports: the Isaac Sim server loads this file by path. Tested in
+tests/test_desk_layout.py.
 
 Frames: the arm's base is at the origin on the tabletop (z = 0), the record
 camera looks back at it from +X. Every item's local frame has its long axis
@@ -27,7 +30,9 @@ class KindSpec:
     """Default size of one kind of item, lying on the desk.
 
     `half` are the collider's half extents in the item frame (X = long axis);
-    `collider` is capsule | cylinder_x | cylinder_z | box | scissors. The
+    `collider` is capsule | cylinder_x | cylinder_z | ring | box | scissors.
+    A ring is a hollow upright cylinder (a tape roll, which drops over the
+    tape peg), `ring_inner` its inner radius. The
     layout only needs the footprint (a 2D capsule: segment half length along X
     plus radius) and `half[2]`, the height of the item's centre above the desk.
     """
@@ -36,11 +41,12 @@ class KindSpec:
     half: tuple[float, float, float]
     mass: float
     friction: float
-    writing: bool = False  # pen-like: may be stacked, goes in the pen cup
+    writing: bool = False  # pen-like: may be stacked, goes in a cup
+    ring_inner: float = 0.0
 
     def footprint(self) -> tuple[float, float]:
         hx, hy, _ = self.half
-        if self.collider in ("capsule", "cylinder_x", "cylinder_z"):
+        if self.collider in ("capsule", "cylinder_x", "cylinder_z", "ring"):
             return max(hx - hy, 0.0), hy
         # Boxes: the capsule that covers the corners.
         r = math.hypot(hy, hy)
@@ -59,11 +65,21 @@ KINDS: dict[str, KindSpec] = {
     # Glue stick lying down, 8.5 cm, 22 mm.
     "glue_stick": KindSpec("cylinder_x", (0.0425, 0.011, 0.011), 0.025, 1.0),
     # Tape roll lying flat: 44 mm across (fits the open gripper), 13 mm wide.
-    "tape_roll": KindSpec("cylinder_z", (0.022, 0.022, 0.0065), 0.030, 1.0),
+    "tape_roll": KindSpec("ring", (0.022, 0.022, 0.0065), 0.030, 1.0, ring_inner=0.0125),
     # Small scissors lying flat: blades + handle loops, 14 cm.
     "scissors": KindSpec("scissors", (0.070, 0.022, 0.004), 0.040, 0.6),
     # Block eraser, 44 x 22 x 12 mm.
     "eraser": KindSpec("box", (0.022, 0.011, 0.006), 0.010, 1.2),
+    # A 76 mm pad of sticky notes, 16 mm thick.
+    "sticky_notes": KindSpec("box", (0.038, 0.038, 0.008), 0.030, 1.0),
+    # Desk stapler, 13 cm x 36 mm x 44 mm: just fits the open jaws across.
+    "stapler": KindSpec("box", (0.065, 0.018, 0.022), 0.150, 0.8),
+    # 20 cm ruler, 30 mm wide, 4 mm thick.
+    "ruler": KindSpec("box", (0.100, 0.015, 0.002), 0.012, 0.7),
+    # Small box of paper clips.
+    "paper_clip_box": KindSpec("box", (0.025, 0.018, 0.012), 0.030, 0.9),
+    # Pencil sharpener.
+    "sharpener": KindSpec("box", (0.013, 0.010, 0.010), 0.010, 0.9),
 }
 
 WRITING_KINDS = tuple(k for k, s in KINDS.items() if s.writing)
@@ -90,14 +106,19 @@ class PoolItem:
 
 # How many of each kind exist. Each episode shows a random subset.
 DEFAULT_COUNTS: dict[str, int] = {
-    "pen": 5,
-    "pencil": 2,
-    "marker": 2,
-    "highlighter": 1,
-    "glue_stick": 1,
-    "tape_roll": 1,
+    "pen": 8,
+    "pencil": 4,
+    "marker": 4,
+    "highlighter": 3,
+    "glue_stick": 2,
+    "tape_roll": 2,
+    "eraser": 2,
+    "sticky_notes": 2,
     "scissors": 1,
-    "eraser": 1,
+    "stapler": 1,
+    "ruler": 1,
+    "paper_clip_box": 1,
+    "sharpener": 1,
 }
 
 
@@ -113,13 +134,39 @@ def default_pool(counts: dict[str, int] = DEFAULT_COUNTS) -> list[PoolItem]:
 
 
 @dataclass(frozen=True)
+class StationPart:
+    """One solid of a station, in the station's frame (z = 0 on the desk).
+
+    box: `half` extents, turned by `yaw` about Z. cylinder: (radius, radius,
+    half height), upright. tube: (inner radius, outer radius, half height),
+    upright, for the eye only (its walls collide as boxes). `role` names its
+    look in meshes.FIXED_LOOKS.
+    """
+
+    name: str
+    shape: str
+    center: tuple[float, float, float]
+    half: tuple[float, float, float]
+    role: str
+    yaw: float = 0.0
+    collide: bool = True
+    visual: bool = True
+
+
+@dataclass(frozen=True)
 class Station:
-    """A fixed receptacle on the desk. `half` is its footprint, `yaw` its heading."""
+    """A fixed receptacle on the desk, and the kinds of item that belong in it.
+
+    `xy` and `yaw` place it; `half` is its footprint (for keeping the clutter
+    off it); `parts` is its geometry, which both simulators build as is.
+    """
 
     name: str
     xy: tuple[float, float]
     yaw: float
     half: tuple[float, float]
+    accepts: tuple[str, ...] = ()
+    parts: tuple[StationPart, ...] = ()
 
 
 def _polar(r: float, deg: float) -> tuple[float, float]:
@@ -127,24 +174,95 @@ def _polar(r: float, deg: float) -> tuple[float, float]:
     return (r * math.cos(a), r * math.sin(a))
 
 
-# Pen cup on the arm's right, compartment tray on its left, both inside reach
-# and outside the clutter fan in front of the arm.
-PEN_CUP = Station("pen_cup", _polar(0.24, -60.0), 0.0, (0.038, 0.038))
+def _cup(name, xy, r_out, height, accepts, role="cup", n_walls=16) -> Station:
+    """A hollow cup: a tube to look at, a ring of box walls to collide with."""
+    t = 0.004
+    r_in = r_out - t
+    r_mid = r_out - t / 2
+    seg = r_mid * math.tan(math.pi / n_walls) + 0.0005
+    parts = [StationPart("visual", "tube", (0, 0, height / 2), (r_in, r_out, height / 2), role, collide=False)]
+    parts.append(StationPart("floor", "cylinder", (0, 0, 0.002), (r_in, r_in, 0.002), role))
+    for k in range(n_walls):
+        a = 2 * math.pi * k / n_walls
+        parts.append(StationPart(
+            f"wall_{k}", "box", (r_mid * math.cos(a), r_mid * math.sin(a), height / 2), (t / 2, seg, height / 2),
+            role, yaw=a, visual=False,
+        ))
+    return Station(name, xy, 0.0, (r_out, r_out), accepts, tuple(parts))
+
+
+def _peg(name, xy, accepts) -> Station:
+    """A post on a round base, for tape rolls to drop over (their core is 25 mm across)."""
+    parts = (
+        StationPart("base", "cylinder", (0, 0, 0.004), (0.035, 0.035, 0.004), "wood"),
+        StationPart("post", "cylinder", (0, 0, 0.008 + 0.03), (0.008, 0.008, 0.03), "metal"),
+    )
+    return Station(name, xy, 0.0, (0.035, 0.035), accepts, parts)
+
+
+def _tray(name, xy, yaw, hx, hy, wall_h, compartments, accepts) -> Station:
+    """An open tray, split into `compartments` along its length."""
+    t = 0.002
+    parts = [
+        StationPart("floor", "box", (0, 0, 0.002), (hx, hy, 0.002), "tray_dark"),
+        StationPart("wall_px", "box", (hx - t, 0, wall_h / 2), (t, hy, wall_h / 2), "tray"),
+        StationPart("wall_nx", "box", (-hx + t, 0, wall_h / 2), (t, hy, wall_h / 2), "tray"),
+        StationPart("wall_py", "box", (0, hy - t, wall_h / 2), (hx, t, wall_h / 2), "tray"),
+        StationPart("wall_ny", "box", (0, -hy + t, wall_h / 2), (hx, t, wall_h / 2), "tray"),
+    ]
+    for k in range(1, compartments):
+        x = -hx + 2 * hx * k / compartments
+        parts.append(StationPart(f"divider_{k}", "box", (x, 0, wall_h * 0.4), (t, hy, wall_h * 0.4), "tray"))
+    return Station(name, xy, yaw, (hx, hy), accepts, tuple(parts))
+
+
+def _pad_zone(name, xy, yaw, h, accepts) -> Station:
+    """A felt mat with a low rim, where the sticky-note pads go."""
+    t, rim = 0.002, 0.004
+    parts = (
+        StationPart("mat", "box", (0, 0, 0.001), (h, h, 0.001), "felt"),
+        StationPart("rim_px", "box", (h - t, 0, rim), (t, h, rim), "tray"),
+        StationPart("rim_nx", "box", (-h + t, 0, rim), (t, h, rim), "tray"),
+        StationPart("rim_py", "box", (0, h - t, rim), (h, t, rim), "tray"),
+        StationPart("rim_ny", "box", (0, -h + t, rim), (h, t, rim), "tray"),
+    )
+    return Station(name, xy, yaw, (h, h), accepts, parts)
+
+
+# Around the arm, inside its reach and clear of the clutter fan in front of
+# it: cups and the tape peg on its right, trays and the note mat on its left
+# and behind it. Trays lie tangent to the arm, so it reaches along them.
+PEN_CUP = _cup("pen_cup", _polar(0.24, -60.0), 0.038, 0.095, ("pen", "pencil"))
 CUP_HEIGHT = 0.095
-TRAY = Station("tray", _polar(0.25, 62.0), math.radians(62.0 + 90.0), (0.095, 0.060))
+MARKER_CUP = _cup("marker_cup", _polar(0.25, -100.0), 0.042, 0.085, ("marker", "highlighter"), role="cup_blue")
+TAPE_PEG = _peg("tape_peg", _polar(0.24, -140.0), ("tape_roll",))
+TRAY = _tray("supply_tray", _polar(0.25, 62.0), math.radians(62.0 + 90.0), 0.095, 0.060, 0.03, 3,
+             ("glue_stick", "eraser", "sharpener", "paper_clip_box"))
 TRAY_WALL_HEIGHT = 0.03
-STATIONS = (PEN_CUP, TRAY)
+NOTE_MAT = _pad_zone("note_mat", _polar(0.24, 112.0), math.radians(112.0), 0.045, ("sticky_notes",))
+LONG_TRAY = _tray("long_tray", _polar(0.27, 160.0), math.radians(160.0 + 90.0), 0.12, 0.045, 0.025, 1,
+                  ("scissors", "ruler", "stapler"))
+STATIONS = (PEN_CUP, MARKER_CUP, TAPE_PEG, TRAY, NOTE_MAT, LONG_TRAY)
+
+
+def station_for(kind: str) -> Station:
+    """Where an item of `kind` belongs."""
+    for s in STATIONS:
+        if kind in s.accepts:
+            return s
+    raise KeyError(f"No station accepts {kind!r}.")
+
 
 # Clutter fan in front of the arm (item centres), and the base to keep clear.
-CLUTTER_RADIUS_M = (0.17, 0.33)
-CLUTTER_HALF_ANGLE_DEG = 42.0
+CLUTTER_RADIUS_M = (0.15, 0.38)  # Within the gamepad's 0.42 m workspace.
+CLUTTER_HALF_ANGLE_DEG = 55.0
 BASE_KEEPOUT_M = 0.10
 CLEARANCE_M = 0.006  # between items that may not touch
 STACK_GAP_M = 0.004  # drop height above whatever a stacked pen crosses
 MAX_STACK = 3  # layers in one pile
 
 # Parking: inactive items lie on the floor under the table, out of view.
-FLOOR_Z = -0.4
+FLOOR_Z = -0.75  # As env/room.py.
 PARK_X = (-0.42, -0.05)
 PARK_Y = (-0.42, 0.42)
 
@@ -196,6 +314,11 @@ TEXTURES_BY_KIND = {
     "tape_roll": ("solid", "stripes", "dots", "checker"),
     "scissors": ("solid", "speckle"),
     "eraser": ("solid", "brand", "stripes", "speckle"),
+    "sticky_notes": ("solid", "solid", "stripes"),
+    "stapler": ("solid", "speckle"),
+    "ruler": ("solid", "bands", "brand"),
+    "paper_clip_box": ("brand", "checker", "solid"),
+    "sharpener": ("solid", "speckle"),
 }
 
 BODY_PALETTE_BY_KIND = {
@@ -207,6 +330,11 @@ BODY_PALETTE_BY_KIND = {
     "tape_roll": ("white", "sky", "pink", "yellow", "green", "smoke", "orange"),
     "scissors": ("red", "orange", "royal_blue", "black", "green", "purple", "pink"),
     "eraser": ("pink", "white", "sky", "green"),
+    "sticky_notes": ("yellow", *NEON_COLORS),
+    "stapler": ("black", "red", "royal_blue", "silver", "smoke"),
+    "ruler": ("white", "silver", "yellow", "sky", "smoke"),
+    "paper_clip_box": ("white", "red", "royal_blue", "yellow", "green"),
+    "sharpener": ("red", "royal_blue", "silver", "yellow", "green", "black"),
 }
 
 
@@ -353,8 +481,8 @@ def park_pose(index: int, item: PoolItem) -> tuple[float, float, float]:
 def sample_desk(
     rng: np.random.Generator,
     pool: list[PoolItem],
-    n_writing: tuple[int, int] = (3, 8),
-    n_supplies: tuple[int, int] = (1, 4),
+    n_writing: tuple[int, int] = (6, 14),
+    n_supplies: tuple[int, int] = (3, 8),
     stack_p: float = 0.35,
     tries: int = 200,
 ) -> list[Placement]:

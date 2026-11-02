@@ -287,10 +287,10 @@ def _furniture() -> list[Part]:
 
 def _lights() -> list[Light]:
     lights = []
-    for i, x in enumerate((-0.8, 0.8, 2.4)):
-        for j, y in enumerate((-1.2, 1.2)):
-            # The two panels over the table cast the shadows.
-            lights.append(Light(f"panel_{i}{j}", "panel", (x, y, CEILING_Z - 0.012), castshadow=i < 2 and j == 0))
+    for i, x in enumerate((-1.0, 0.6, 2.2)):
+        for j, y in enumerate((-0.9, 0.9)):
+            # The panel nearest above the table casts the shadows.
+            lights.append(Light(f"panel_{i}{j}", "panel", (x, y, CEILING_Z - 0.012), castshadow=(i, j) == (1, 0)))
     # Daylight through the +Y window, slanting down into the room.
     lights.append(Light("sun", "sun", (0.9, ROOM_HALF_Y, CEILING_Z), _sun_dir(0.0, 40.0), intensity=1.0, temp_k=5800.0, castshadow=True))
     return lights

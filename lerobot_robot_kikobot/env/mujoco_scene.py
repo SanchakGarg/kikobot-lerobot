@@ -1,6 +1,6 @@
 """Builds the MuJoCo scenes: the arm, in the lab of `room.py`, with a task on its table.
 
-    spec = build_scene("pick_place")   # empty | pick_place | cylinder
+    spec = build_scene("pick_place")   # empty | pick_place | cylinder | desk_sort
     model = spec.compile()
     lights = RoomLights(model, lab_room())
     lights.apply(sample_lighting(rng, lab_room()))   # once per reset
@@ -21,7 +21,7 @@ from ..desk import textures as desk_textures
 from ..paths import MODELS_DIR
 from .room import LightState, Part, RoomSpec, lab_room, look_at_axes, texture_values
 
-SCENE_NAMES = ("empty", "pick_place", "cylinder")
+SCENE_NAMES = ("empty", "pick_place", "cylinder", "desk_sort")
 TEXTURE_SIZE = 256
 
 # Relative light intensity (room.py) to MuJoCo's light colours. MuJoCo adds
@@ -31,6 +31,9 @@ PANEL_SPECULAR = 0.05
 SUN_DIFFUSE = 0.45
 SUN_SPECULAR = 0.15
 PANEL_CUTOFF_DEG = 80.0
+# A shadow map spans the light's whole cone: the shadow-casting panel gets a
+# narrower one (it still covers the table), or its shadows come out jagged.
+SHADOW_PANEL_CUTOFF_DEG = 45.0
 
 
 def _light_name(name: str) -> str:
@@ -86,15 +89,18 @@ def _add_part(spec: mujoco.MjSpec, p: Part) -> None:
 
 def _add_lights(spec: mujoco.MjSpec, room: RoomSpec) -> None:
     for l in room.lights:
+        # MuJoCo's directional shadow map spreads too thin over a room this
+        # size (jagged, hard-edged shadows): its sun lights without one. The
+        # panel over the table casts the shadows here; Isaac's RTX keeps both.
         light = spec.worldbody.add_light(name=_light_name(l.name), pos=list(l.pos), dir=list(l.dir),
-                                         castshadow=l.castshadow)
+                                         castshadow=l.castshadow and l.kind != "sun")
         if l.kind == "sun":
             light.type = mujoco.mjtLightType.mjLIGHT_DIRECTIONAL
             light.diffuse = [SUN_DIFFUSE * l.intensity] * 3
             light.specular = [SUN_SPECULAR * l.intensity] * 3
         else:
             light.type = mujoco.mjtLightType.mjLIGHT_SPOT
-            light.cutoff = PANEL_CUTOFF_DEG
+            light.cutoff = SHADOW_PANEL_CUTOFF_DEG if l.castshadow else PANEL_CUTOFF_DEG
             light.exponent = 2.0
             light.diffuse = [PANEL_DIFFUSE * l.intensity] * 3
             light.specular = [PANEL_SPECULAR * l.intensity] * 3
@@ -120,7 +126,6 @@ def _visual(spec: mujoco.MjSpec) -> None:
     v.global_.azimuth, v.global_.elevation = 160.0, -20.0
     v.map.znear = 0.005
     v.map.zfar = 12.0
-    v.map.shadowclip = 3.0
     v.rgba.haze = [0.85, 0.86, 0.88, 1.0]
 
 
@@ -162,6 +167,10 @@ def build_scene(name: str, room: RoomSpec | None = None) -> mujoco.MjSpec:
     _add_cameras(spec, room)
     if name in ("pick_place", "cylinder"):
         _add_pick_place(spec, cylinder=name == "cylinder")
+    elif name == "desk_sort":
+        from ..desk.mujoco_desk import add_desk  # noqa: PLC0415
+
+        add_desk(spec)
     return spec
 
 
