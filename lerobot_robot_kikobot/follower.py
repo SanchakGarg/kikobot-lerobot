@@ -106,6 +106,8 @@ class KikobotFollower(Robot):
         self._cal_bus: FeetechBus | None = None
         # Joints calibrate() has moved to their centre and holds there.
         self._held: list[str] = []
+        # MuJoCo window showing the pose calibrate() is asking for.
+        self._cal_view: SimDisplay | None = None
 
     # ---------------------------------------------------------------- features
 
@@ -166,6 +168,25 @@ class KikobotFollower(Robot):
     def is_calibrated(self) -> bool:
         # Uncalibrated still runs, on the mid-scale default above.
         return True
+
+    def _open_cal_view(self) -> None:
+        if not self.config.calibration_view:
+            return
+        try:
+            self._cal_view = SimDisplay("mujoco", self.config.display_scene)
+        except Exception as exc:  # e.g. macOS without mjpython, or no display.
+            logger.warning("No MuJoCo calibration view (%s); prompts only.", exc)
+
+    def _show(self, motor: str | None = None, angle: float = 0.0, q: np.ndarray | None = None) -> None:
+        """Pose the view: every joint at its centre except `motor` at `angle`, or `q`."""
+        if self._cal_view is None:
+            return
+        if q is None:
+            q = (self.lower + self.upper) / 2
+            if motor is not None:
+                q[list(self.motor_ids).index(motor)] = angle
+        pct = self._gripper_pct(q[6]) if len(q) > len(ARM_JOINTS) else 100.0
+        self._cal_view.update(q, pct, q)
 
     def _end_names(self, i: int, motor: str) -> tuple[str, str]:
         if motor == "gripper":
@@ -279,6 +300,7 @@ class KikobotFollower(Robot):
     def _check(self) -> None:
         """Print the arm's joint angles, as the sim would show them, until 'q'."""
         ready = np.rad2deg(self.kin.ready_q())
+        self._show(q=np.append(self.kin.ready_q(), self.upper[6:]))
         print(
             "\nTorque is off, support the arm. Bend it by hand into the sim's ready pose\n"
             "(the pose teleop starts in) and compare. A joint with the wrong sign was\n"
@@ -321,6 +343,7 @@ class KikobotFollower(Robot):
         own_bus = self.bus is None
         cfg = self.config
         self._cal_bus = self.bus or FeetechBus(cfg.port, cfg.baudrate, list(self.motor_ids.values()))
+        self._open_cal_view()
         try:
             self._bus_retry("turning torque off", lambda b: b.set_torque(False))
             if motors:
@@ -349,6 +372,9 @@ class KikobotFollower(Robot):
                 # It may have been reopened.
                 self.bus = self._cal_bus
             self._cal_bus = None
+            if self._cal_view is not None:
+                self._cal_view.close()
+                self._cal_view = None
         if self._held:
             print(f"{' '.join(self._held)} stay powered at their centres; the rest are limp.")
         else:
@@ -372,8 +398,12 @@ class KikobotFollower(Robot):
         )
         while True:
             readings = []
-            for step in ("min", "middle (anywhere in between)", "max"):
-                input(f"  {motor}: at {step}? ENTER ")
+            mid = (self.lower[i] + self.upper[i]) / 2
+            for step, angle in (
+                ("min", self.lower[i]), ("middle (anywhere in between)", mid), ("max", self.upper[i])
+            ):
+                self._show(motor, angle)
+                input(f"  {motor}: at {step}, as in the MuJoCo view? ENTER ")
                 # Only this servo: a loose cable elsewhere does not matter here.
                 raw = self._bus_retry(f"reading {motor}", lambda b: b.read_position(servo_id))
                 readings.append(raw + old_offset)
@@ -420,6 +450,8 @@ class KikobotFollower(Robot):
         )
         if answer.strip().lower() == "s":
             return
+
+        self._show()
 
         def move(bus: FeetechBus) -> None:
             start = bus.read_position(servo_id)

@@ -404,6 +404,13 @@ always free, and the ones already done hold the arm up.
    | gripper | jaws closed | jaws open |
    Before each joint it prints which way its min and max lie (the table
    below), then asks for min, middle and max in turn.
+
+   A **MuJoCo window** shows the pose each step asks for: the joint being
+   calibrated at min, middle or max, every other joint at its centre (where
+   the calibrated ones are holding). Match the real arm to it. `check` shows
+   the ready pose there. `--robot.calibration_view=false` turns it off; on
+   macOS it needs `mjpython` instead of the `lerobot-calibrate` command
+   (`$V/mjpython -m lerobot.scripts.lerobot_calibrate ...`).
 3. Each joint prints its travel in servo steps and how it compares with
    the servo's nominal 4096 steps per turn. A warning means the measured
    travel is more than 15 % off the model's: type `r` to redo that joint
@@ -524,6 +531,7 @@ Follower options (`--robot.<name>=`):
 | `p_coefficient` / `d_coefficient` / `i_coefficient` | `16` / `32` / `0` | Servo position-loop gains |
 | `disable_torque_on_disconnect` | `false` | Off by default so the arm does not drop |
 | `display` | `rerun` | Live view of the commanded (sim) motion: `rerun`, `mujoco`, `both`, `none` ([live view](#live-view)) |
+| `calibration_view` | `true` | MuJoCo window during calibration showing the pose to match |
 | `display_scene` | `pick_place` | Scene of the live view: `pick_place` (the arm on its desk), `cylinder`, `empty` or an MJCF path |
 
 ---

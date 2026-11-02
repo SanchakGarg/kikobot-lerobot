@@ -106,6 +106,9 @@ class KikobotFollowerConfig(RobotConfig):
     # Scene the live view draws the arm in: empty | pick_place | cylinder, or
     # a path to an MJCF file. pick_place is the arm on its desk.
     display_scene: str = "pick_place"
+    # During lerobot-calibrate, a MuJoCo window showing the pose each step asks
+    # for (macOS: run under mjpython).
+    calibration_view: bool = True
 
 
 @TeleoperatorConfig.register_subclass("kikobot_gamepad")
