@@ -411,7 +411,14 @@ middle of its travel reads 2048 (the range never wraps), and the file
 (`%USERPROFILE%\.cache\...` on Windows) gets, per joint, the readings at
 its two ends (`range_min` / `range_max`), its direction (`drive_mode`) and
 its reading at the model's zero (`homing_offset`). Positions in between are
-linear. Ctrl+C before the last joint leaves the old calibration in place.
+linear. Each joint is saved as soon as it is done, so Ctrl+C (or a crash)
+keeps the joints finished so far and leaves the rest as they were.
+
+If the servos stop answering mid-calibration (a cable pulled loose at a
+joint's end, or the supply dipping), it says which servo and waits: fix it
+and press Enter to retry; the port is reopened if the adapter dropped. Move
+joints slowly by hand: a servo turned fast acts as a generator and feeds
+voltage spikes back into the bus.
 
 <a id="home-pose"></a>**Home pose.** After the joints (or alone, with
 `home`), it asks you to hold the arm in its home pose and press Enter
@@ -593,6 +600,7 @@ all three with Python 3.11+.
 | `Could not open /dev/ttyACM0` | Wrong port (`lerobot-find-port`), or not in `dialout` (log out and in after `usermod`). |
 | `There is no status packet!` | A servo stopped replying after answering the ping. Transactions are retried and sync read falls back to single reads automatically; if it persists, the full error names the servo: check its cable and the supply (a sagging 12 V drops replies). Waveshare adapter: jumper on **A**. |
 | No rerun window opens | `rerun-sdk` comes with LeRobot's `core_scripts` extra; otherwise `pip install rerun-sdk`. Over SSH there is no display: use `--robot.display=none`. |
+| The connection drops during calibration | Calibration is the only time every joint reaches its ends, which pulls the daisy-chained servo cables tight: a half-seated connector drops that servo and every one after it. Reseat the cables, leave slack at each joint (J6 turns ±175°), move joints slowly, and press Enter to retry at the prompt. If it is the USB adapter that drops (the port vanishes), on Ubuntu turn off USB autosuspend: `echo -1 \| sudo tee /sys/module/usbcore/parameters/autosuspend`. |
 | `Servos [...] did not answer` | The bus has no 12 V, a cable is loose, or `--robot.servo_ids` is wrong. `[7]` alone: no gripper servo on the bus; pass `--robot.gripper_id=null`. |
 | `glfw.init() failed` | No desktop session (e.g. bare SSH on Ubuntu). Run from the desktop. |
 | `No gamepad found` | Plug the controller in, then restart (it is only detected at startup). The log lists every joystick GLFW sees; on Ubuntu, if none appear, run `sudo usermod -aG input $USER` and log in again. Xbox pads unknown to GLFW get the xpad layout automatically. |

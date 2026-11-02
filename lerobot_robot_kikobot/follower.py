@@ -94,6 +94,8 @@ class KikobotFollower(Robot):
         self._target: np.ndarray | None = None
         self._last_gripper_pct = 100.0
         self._display: SimDisplay | None = None
+        # The bus during calibrate(), reopened there if it drops.
+        self._cal_bus: FeetechBus | None = None
 
     # ---------------------------------------------------------------- features
 
@@ -217,7 +219,36 @@ class KikobotFollower(Robot):
         print(f"Saved to {self.calibration_fpath}")
         return True
 
-    def _check(self, bus: FeetechBus) -> None:
+    def _bus_retry(self, what: str, call):
+        """Run `call(bus)`; if the bus drops, wait for the user, reopen it and retry.
+
+        Moving a joint by hand to its end can pull a servo cable loose, and a
+        back-driven servo can brown out the supply; neither should lose the run.
+        """
+        while True:
+            try:
+                return call(self._cal_bus)
+            except Exception as exc:
+                answer = input(
+                    f"  Lost the servos while {what}: {exc}\n"
+                    "  Check that servo's cable (and the ones before it) and the 12 V supply,\n"
+                    "  then ENTER to retry, or 'q' and ENTER to stop: "
+                )
+                if answer.strip().lower() == "q":
+                    raise
+            try:
+                self._cal_bus.close()
+            except Exception:
+                pass
+            try:
+                cfg = self.config
+                self._cal_bus = FeetechBus(cfg.port, cfg.baudrate, list(self.motor_ids.values()))
+                # A servo that browned out may come back up with torque on.
+                self._cal_bus.set_torque(False)
+            except Exception as exc:
+                print(f"  Could not reopen {self.config.port}: {exc}")
+
+    def _check(self) -> None:
         """Print the arm's joint angles, as the sim would show them, until 'q'."""
         ready = np.rad2deg(self.kin.ready_q())
         print(
@@ -227,10 +258,10 @@ class KikobotFollower(Robot):
             f"  ready  {'  '.join(f'{j} {a:+6.0f}' for j, a in zip(ARM_JOINTS, ready))}"
         )
         while input("ENTER reads the arm, 'q' and ENTER quits: ").strip().lower() != "q":
-            q = np.rad2deg(self._from_raw(bus.read_positions()))
+            q = np.rad2deg(self._from_raw(self._bus_retry("reading the arm", lambda b: b.read_positions())))
             print(f"  arm    {'  '.join(f'{j} {a:+6.0f}' for j, a in zip(ARM_JOINTS, q))}")
 
-    def _set_home(self, bus: FeetechBus) -> None:
+    def _set_home(self) -> None:
         """Save the pose the arm is held in as the teleop's start and Y pose."""
         path = home_pose_path(self.id, self.calibration_dir)
         answer = input(
@@ -239,7 +270,7 @@ class KikobotFollower(Robot):
         )
         if answer.strip().lower() == "s":
             return
-        q = self._from_raw(bus.read_positions())
+        q = self._from_raw(self._bus_retry("reading the home pose", lambda b: b.read_positions()))
         home = {j: round(float(np.rad2deg(q[i])), 2) for i, j in enumerate(ARM_JOINTS)}
         if self.config.gripper_id is not None:
             home["gripper"] = round(float(np.clip(self._gripper_pct(q[6]), 0.0, 100.0)), 1)
@@ -261,73 +292,75 @@ class KikobotFollower(Robot):
             self.streamer.stop()
             self.streamer = None
         own_bus = self.bus is None
-        bus = self.bus or FeetechBus(self.config.port, self.config.baudrate, list(self.motor_ids.values()))
-        fits = {}
+        cfg = self.config
+        self._cal_bus = self.bus or FeetechBus(cfg.port, cfg.baudrate, list(self.motor_ids.values()))
         try:
-            bus.set_torque(False)
-            # Readings are taken as actual positions; the servos keep their old
-            # offset until the end, so an aborted run leaves the old calibration valid.
-            old_offset = {m: bus.homing_offset(self.motor_ids[m]) for m in motors}
+            self._bus_retry("turning torque off", lambda b: b.set_torque(False))
             if motors:
                 print(
                     "\nTorque is off and stays off: support the arm. For each joint, move it\n"
                     "by hand to its min end, then to any point in between, then to its max\n"
                     "end, pressing ENTER at each. Min and max are the MuJoCo model's joint\n"
                     "limits. The middle point only tells which way the joint turned.\n"
+                    "Move the joints slowly: a servo turned fast by hand feeds power back\n"
+                    "into the bus. Each joint is saved as soon as it is done.\n"
                 )
             for motor in motors:
-                i = list(self.motor_ids).index(motor)
-                servo_id = self.motor_ids[motor]
-                lo_name, hi_name = self._end_names(i, motor)
-                while True:
-                    readings = []
-                    for step in (lo_name, "middle, anywhere", hi_name):
-                        input(f"  {motor}: move to {step}, then ENTER ")
-                        readings.append(bus.read_positions()[servo_id] + old_offset[motor])
-                    try:
-                        fit = fit_range(*readings, self.lower[i], self.upper[i])
-                    except ValueError as exc:
-                        print(f"  {motor}: {exc}. Again.")
-                        continue
-                    ratio = fit.span_steps * RAD_PER_STEP / (self.upper[i] - self.lower[i])
-                    print(f"  {motor}: {fit.span_steps} steps, {ratio:.2f}x the servo's nominal scale")
-                    if abs(ratio - 1.0) > 0.15:
-                        answer = input(
-                            f"  warning: {motor}'s travel differs from the model's by "
-                            f"{abs(ratio - 1) * 100:.0f}%. Type 'r' and ENTER to redo it, or ENTER to keep: "
-                        )
-                        if answer.strip().lower() == "r":
-                            continue
-                    fits[motor] = fit
-                    break
-            for motor, fit in fits.items():
-                bus.set_homing_offset(self.motor_ids[motor], fit.servo_offset)
-            if fits:
-                # Joints not redone keep their entry.
-                self.calibration = {
-                    **self.calibration,
-                    **{
-                        motor: MotorCalibration(
-                            id=self.motor_ids[motor],
-                            drive_mode=fit.drive_mode,
-                            homing_offset=fit.zero,
-                            range_min=fit.range_min,
-                            range_max=fit.range_max,
-                        )
-                        for motor, fit in fits.items()
-                    },
-                }
-                self._save_calibration()
-                print(f"Calibration of {' '.join(fits)} saved to {self.calibration_fpath}")
+                self._calibrate_joint(motor)
             # Read with the new calibration, so it is in the model's angles.
             if only == "check":
-                self._check(bus)
+                self._check()
             else:
-                self._set_home(bus)
+                self._set_home()
         finally:
             if own_bus:
-                bus.close()
+                self._cal_bus.close()
+            else:
+                # It may have been reopened.
+                self.bus = self._cal_bus
+            self._cal_bus = None
         print("Torque is still off. lerobot-teleoperate uses this from now on.")
+
+    def _calibrate_joint(self, motor: str) -> None:
+        i = list(self.motor_ids).index(motor)
+        servo_id = self.motor_ids[motor]
+        lo_name, hi_name = self._end_names(i, motor)
+        # Readings are taken as actual positions. The servo keeps its old
+        # offset until the joint is done, so stopping half-way leaves the old
+        # calibration valid.
+        old_offset = self._bus_retry(f"reading {motor}'s offset", lambda b: b.homing_offset(servo_id))
+        while True:
+            readings = []
+            for step in (lo_name, "middle, anywhere", hi_name):
+                input(f"  {motor}: move to {step}, then ENTER ")
+                # Only this servo: a loose cable elsewhere does not matter here.
+                raw = self._bus_retry(f"reading {motor}", lambda b: b.read_position(servo_id))
+                readings.append(raw + old_offset)
+            try:
+                fit = fit_range(*readings, self.lower[i], self.upper[i])
+            except ValueError as exc:
+                print(f"  {motor}: {exc}. Again.")
+                continue
+            ratio = fit.span_steps * RAD_PER_STEP / (self.upper[i] - self.lower[i])
+            print(f"  {motor}: {fit.span_steps} steps, {ratio:.2f}x the servo's nominal scale")
+            if abs(ratio - 1.0) > 0.15:
+                answer = input(
+                    f"  warning: {motor}'s travel differs from the model's by "
+                    f"{abs(ratio - 1) * 100:.0f}%. Type 'r' and ENTER to redo it, or ENTER to keep: "
+                )
+                if answer.strip().lower() == "r":
+                    continue
+            break
+        self._bus_retry(f"writing {motor}'s offset", lambda b: b.set_homing_offset(servo_id, fit.servo_offset))
+        self.calibration[motor] = MotorCalibration(
+            id=servo_id,
+            drive_mode=fit.drive_mode,
+            homing_offset=fit.zero,
+            range_min=fit.range_min,
+            range_max=fit.range_max,
+        )
+        self._save_calibration()
+        print(f"  {motor} saved to {self.calibration_fpath}")
 
     def configure(self) -> None:
         bus = self.bus

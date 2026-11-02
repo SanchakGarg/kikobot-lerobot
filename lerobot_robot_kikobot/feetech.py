@@ -160,13 +160,13 @@ class FeetechBus:
             return out
         return self.read_positions()
 
+    def read_position(self, servo_id: int) -> int:
+        value, result, error = self._txrx(self.packet.read2ByteTxRx, servo_id, ADDR_PRESENT_POSITION)
+        self._check(result, error, f"read servo {servo_id} position")
+        return _sign_magnitude(value)
+
     def read_positions(self) -> dict[int, int]:
-        out = {}
-        for i in self.ids:
-            value, result, error = self._txrx(self.packet.read2ByteTxRx, i, ADDR_PRESENT_POSITION)
-            self._check(result, error, f"read servo {i} position")
-            out[i] = _sign_magnitude(value)
-        return out
+        return {i: self.read_position(i) for i in self.ids}
 
     def sync_write_goals(self, goals: dict[int, int]) -> None:
         self._writer.clearParam()
