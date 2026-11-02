@@ -127,3 +127,6 @@ class KikobotGamepadConfig(TeleoperatorConfig):
     workspace_radius_m: float = 0.42
     workspace_min_z_m: float = 0.01
     workspace_max_z_m: float = 0.50
+    # `--robot.id` of the arm whose home pose (set with lerobot-calibrate) the
+    # teleop starts at and returns to on Y. Without one, the built-in ready pose.
+    robot_id: str | None = "kikobot"

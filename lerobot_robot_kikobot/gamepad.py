@@ -4,8 +4,9 @@ The sticks drive the gripper's full pose (XYZ and roll/pitch/yaw); IK over
 all six joints turns that into joint targets. The teleop owns the
 commanded pose and solves on its own copy of the model, so it works under
 plain `lerobot-teleoperate` / `lerobot-record` with no link to the robot.
-It starts at the same ready pose the sim resets to; the real arm's motion
-shaper eases into it from wherever the arm is.
+It starts at the home pose saved by `lerobot-calibrate` for `--teleop.robot_id`,
+or else at the ready pose the sim resets to; the real arm's motion shaper
+eases into it from wherever the arm is.
 
 Xbox layout (PlayStation: cross = A, circle = B, square = X, triangle = Y):
 
@@ -17,7 +18,7 @@ Xbox layout (PlayStation: cross = A, circle = B, square = X, triangle = Y):
     A (hold)        close the jaws
     B (hold)        open the jaws
     X               toggle precision mode (slower)
-    Y               back to the ready pose
+    Y               back to the home pose (the ready pose if none is saved)
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from lerobot.utils.decorators import check_if_already_connected, check_if_not_co
 
 from .config import ARM_JOINTS, KikobotGamepadConfig
 from .kinematics import ArmKinematics, axis_angle_quat, quat_to_mat
+from .paths import home_pose_path, load_home_pose
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +107,7 @@ class KikobotGamepad(Teleoperator):
             )
         self._glfw = glfw
         self._joystick = self._find_gamepad(glfw)
+        self._load_home()
         self._go_ready()
 
     def _find_gamepad(self, glfw) -> int:
@@ -142,10 +145,29 @@ class KikobotGamepad(Teleoperator):
         logger.info("Gamepad: %s (slot %d)", glfw.get_gamepad_name(chosen), chosen - glfw.JOYSTICK_1)
         return chosen
 
+    def _load_home(self) -> None:
+        self._home_q = self.kin.ready_q()
+        self._home_gripper = None
+        home = load_home_pose(self.config.robot_id) if self.config.robot_id else None
+        if home is None:
+            return
+        q = np.deg2rad([home[j] for j in ARM_JOINTS])
+        self._home_q = np.clip(q, self.kin.lower, self.kin.upper)
+        self._home_gripper = home.get("gripper")
+        logger.info("Home pose from %s: %s", home_pose_path(self.config.robot_id), home)
+        pos, _ = self.kin.fk(self._home_q)
+        if not np.allclose(self._clip_workspace(pos), pos):
+            logger.warning(
+                "The home pose's gripper is outside the teleop workspace; the first move "
+                "pulls it in. Widen --teleop.workspace_* or set a home closer in."
+            )
+
     def _go_ready(self) -> None:
-        self._q = self.kin.ready_q()
+        self._q = self._home_q.copy()
         self._pos, self._rot = self.kin.fk(self._q)
         self._twist[:] = 0.0
+        if self._home_gripper is not None:
+            self._gripper_pct = float(self._home_gripper)
 
     @property
     def is_calibrated(self) -> bool:

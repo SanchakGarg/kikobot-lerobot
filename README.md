@@ -150,7 +150,7 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
   measured. Without a calibration file, J5 is inverted by default because
   its servo turns opposite to the model ([joint direction](#joint-direction)).
 - Left stick and LT/RT move the gripper; right stick and LB/RB rotate it;
-  hold A to close, B to open; X toggles precision mode; Y returns to ready.
+  hold A to close, B to open; X toggles precision mode; Y returns to the home pose.
   Full table in [section 4](#4-gamepad-controls).
 - **Ctrl+C** stops teleop. Torque stays on so the arm does not drop; power
   the servos off, or add `--robot.disable_torque_on_disconnect=true`, to let
@@ -303,7 +303,7 @@ Xbox layout. On PlayStation: cross = A, circle = B, square = X, triangle = Y.
 | A (hold) | Close the jaws |
 | B (hold) | Open the jaws |
 | X | Precision mode on/off (30 % speed) |
-| Y | Back to the ready pose |
+| Y | Back to the home pose ([set in calibration](#home-pose); the ready pose if none) |
 
 Moves are in the base frame, rotations about the gripper's own axes, and
 every axis is independent: moving in X does not tilt the jaws. At the edge
@@ -315,7 +315,8 @@ when it starts.
 
 Teleop options (`--teleop.<name>=`): `linear_speed_m_s` (0.12),
 `angular_speed_deg_s` (90), `gripper_speed_pct_s` (120), `deadzone` (0.12),
-`input_smoothing_s` (0.12), `precision_scale` (0.3), `joystick` (0).
+`input_smoothing_s` (0.12), `precision_scale` (0.3), `joystick` (0),
+`robot_id` (`kikobot`: whose saved [home pose](#home-pose) to use).
 
 ---
 
@@ -365,21 +366,38 @@ The servos never move during calibration: torque goes off as soon as it
 connects and stays off when it ends, so **support the arm the whole time**
 and lower it to rest before the last Enter.
 
-1. If a calibration file exists, it asks what to redo:
+1. If a calibration file exists, it asks what to do:
    - **Enter**: keep it as it is;
    - **`all`**: redo every joint;
    - **joint names**: redo only those, e.g. `J3`, `gripper` or `J2 gripper`.
-     The other joints keep their saved calibration.
+     The other joints keep their saved calibration;
+   - **`home`**: only set the [home pose](#home-pose);
+   - **`check`**: only [check the directions](#check-directions).
    A joint missing from the file (e.g. the gripper, if you calibrated before
    it was added) is listed as "not calibrated yet".
 2. For each joint, J1 to J6 and the gripper (bus ID 7,
    `--robot.gripper_id`), move it by hand and press Enter at each of:
-   - **min**: the joint's lower limit (the terminal prints it in degrees;
-     for the gripper, jaws closed);
+   - **min**: the joint's lower limit;
    - **middle**: anywhere in between. It is only used to tell which way
      the joint turned from min to max, so a joint whose travel passes the
      servo's 4095 → 0 wrap is still read right;
-   - **max**: the joint's upper limit (gripper: jaws open).
+   - **max**: the joint's upper limit.
+
+   **Which end is min matters.** It sets the joint's direction; the wrong
+   way round, the real joint turns opposite to the sim, and gamepad moves
+   come out in the wrong directions (e.g. a forward push lifts the arm).
+   "Front" is the way the arm reaches in the ready pose: stand behind the
+   base facing it. The prompt prints these too:
+
+   | Joint | min | max |
+   |---|---|---|
+   | J1 (−165° / +165°) | base turned counter-clockwise, seen from above | clockwise |
+   | J2 (−125° / +125°) | upper arm tilted forward, toward the front | tilted back |
+   | J3 (−140° / +140°) | forearm bent up and back (opposite to the ready pose) | bent forward and down (as in the ready pose) |
+   | J4 (−140° / +140°) | wrist tilted so the jaws swing back, toward the base | jaws swing forward and up |
+   | J5 (−140° / +140°) | wrist swung to the left | to the right |
+   | J6 (−175° / +175°) | jaws turned clockwise, seen from above with the jaws pointing down | counter-clockwise |
+   | gripper | jaws closed | jaws open |
 3. Each joint prints its travel in servo steps and how it compares with
    the servo's nominal 4096 steps per turn. A warning means the measured
    travel is more than 15 % off the model's: type `r` to redo that joint
@@ -392,6 +410,22 @@ middle of its travel reads 2048 (the range never wraps), and the file
 its two ends (`range_min` / `range_max`), its direction (`drive_mode`) and
 its reading at the model's zero (`homing_offset`). Positions in between are
 linear. Ctrl+C before the last joint leaves the old calibration in place.
+
+<a id="home-pose"></a>**Home pose.** After the joints (or alone, with
+`home`), it asks you to hold the arm in its home pose and press Enter
+(`s` skips). That is where teleop starts and where **Y** returns the arm,
+jaws included. It is saved as `kikobot_home.json` next to the calibration
+file. The gamepad reads it for `--teleop.robot_id` (default `kikobot`; use
+the same name as `--robot.id`); with none saved it uses the built-in ready
+pose. Pick a pose with the jaws above the table and inside the teleop
+workspace, or the first move pulls them in.
+
+<a id="check-directions"></a>**Check the directions.** `check` prints
+the arm's joint angles as the sim would show them, each time you press
+Enter, next to the sim's ready pose. Bend the real arm by hand into the
+ready pose you see in the sim and compare: every joint should have the
+same sign and roughly the same value. A joint whose sign is opposite was
+calibrated the wrong way round: run calibrate again and type just its name.
 
 `lerobot-teleoperate` and `lerobot-record` load that file automatically when
 given the same `--robot.id` (here `kikobot`); the log says
@@ -411,8 +445,10 @@ $V/lerobot-teleoperate --robot.type=kikobot_follower --robot.port=/dev/ttyACM0 \
 ```
 
 On connect the arm holds where it is (the goal is set to the measured
-position before torque comes on), then eases to the ready pose at reduced
-speed.
+position before torque comes on), then eases to the [home pose](#home-pose)
+(or the ready pose, if none is saved) at reduced speed.
+
+Without the rerun window: add `--robot.display=none`.
 
 <a id="live-view"></a>**Live view.** While the arm runs, a rerun window
 shows the simulated arm on its desk (`--robot.display_scene`), following
@@ -553,6 +589,8 @@ all three with Python 3.11+.
 | `No gamepad found` | Plug the controller in, then restart (it is only detected at startup). The log lists every joystick GLFW sees; on Ubuntu, if none appear, run `sudo usermod -aG input $USER` and log in again. Xbox pads unknown to GLFW get the xpad layout automatically. |
 | Wrong device used as the gamepad | Pick its slot from the `Joystick slot N` log lines: `--teleop.joystick=N`. |
 | `Settings schema 'org.gnome.settings-daemon.plugins.xsettings' does not contain a key named 'antialiasing'` (Ubuntu) | Launched from a Snap app's terminal (e.g. Snap VS Code). Run from a normal terminal, or install VS Code from the `.deb`. |
+| Gamepad moves come out in the wrong directions (e.g. X/Y moves the arm up and down) | One or more joints are calibrated the wrong way round. Run calibrate, type `check`, and compare with the sim's ready pose ([check the directions](#check-directions)); redo each joint with the wrong sign by name. |
+| `Sender has been blocked for over 5 seconds waiting for space in channel` and teleop freezes | Fixed: the rerun view now sends JPEG frames at 15 Hz from its own thread and drops frames when the viewer lags. Update (`git pull`). `--robot.display=none` turns the view off. |
 | A joint moves the wrong way (opposite to the sim) | Compare the real arm with the rerun view (a joint's measured line moves opposite to its commanded line). Calibrated: redo [calibration](#calibration), with min and max at the ends the model shows. Uncalibrated: list it in `--robot.inverted_joints` (default `[J5]`), e.g. `'[J5,J3]'` ([6](#joint-direction)). |
 | Real arm stops short of, or overshoots, the sim's pose | Redo [calibration](#calibration) with each joint pushed fully to the ends the model shows. |
 | Arm wobbles after stopping | Measure and set `shaper_freq_hz` ([7](#7-tune-the-motion-input-shaping)), or lower `max_acceleration_deg_s2`. |

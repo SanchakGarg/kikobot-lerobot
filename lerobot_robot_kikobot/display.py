@@ -5,11 +5,16 @@ sim robot would make), not the measured pose. In rerun it also plots each
 joint's commanded and measured angle, so tracking error is visible at a glance.
 
 Modes: `rerun` (default), `mujoco` (native window), `both`, `none`.
+
+Sending to rerun happens on a thread of its own and drops frames when the
+viewer falls behind: a blocked log call must never stall the control loop.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+import time
 
 import mujoco
 import mujoco.viewer
@@ -22,6 +27,10 @@ logger = logging.getLogger(__name__)
 
 DISPLAY_MODES = ("rerun", "mujoco", "both", "none")
 SIM_IMAGE = "sim"
+# Rerun frame rate. Each frame is a JPEG of a few tens of kB; raw 640x480
+# frames at the 30 Hz loop rate (27 MB/s) are more than the viewer keeps up with.
+RERUN_HZ = 15.0
+JPEG_QUALITY = 80
 
 
 class SimDisplay:
@@ -71,7 +80,16 @@ class SimDisplay:
                 )
             )
         )
+        # Rendered on the caller's thread (GL contexts are bound to it), sent on
+        # this one. One pending frame at most; a newer one replaces it.
         self._renderer = mujoco.Renderer(self.model, height=height, width=width)
+        self._last_frame_t = 0.0
+        self._pending = None
+        self._pending_lock = threading.Lock()
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._sender = threading.Thread(target=self._send_loop, name="kikobot-rerun", daemon=True)
+        self._sender.start()
         self._camera = mujoco.MjvCamera()
         # The whole desk with the arm on it.
         self._camera.lookat[:] = (0.1, 0.05, 0.1)
@@ -89,21 +107,45 @@ class SimDisplay:
 
         if self._viewer is not None and self._viewer.is_running():
             self._viewer.sync()
-        if self._rec is not None:
-            rr = self._rr
+        now = time.perf_counter()
+        if self._rec is not None and now - self._last_frame_t >= 1.0 / RERUN_HZ:
+            self._last_frame_t = now
             self._renderer.update_scene(d, camera=self._camera)
-            self._rec.log(SIM_IMAGE, rr.Image(self._renderer.render()))
-            for i, j in enumerate(ARM_JOINTS):
-                self._rec.log(f"joints/{j}/commanded", rr.Scalars(float(np.rad2deg(commanded[i]))))
-                self._rec.log(f"joints/{j}/measured", rr.Scalars(float(np.rad2deg(measured[i]))))
+            frame = (self._renderer.render(), np.rad2deg(commanded), np.rad2deg(measured))
+            with self._pending_lock:
+                self._pending = frame
+            self._wake.set()
+
+    def _send_loop(self) -> None:
+        rr = self._rr
+        while not self._stop.is_set():
+            if not self._wake.wait(timeout=0.5):
+                continue
+            self._wake.clear()
+            with self._pending_lock:
+                frame, self._pending = self._pending, None
+            if frame is None:
+                continue
+            image, commanded, measured = frame
+            try:
+                self._rec.log(SIM_IMAGE, rr.Image(image).compress(jpeg_quality=JPEG_QUALITY))
+                for i, j in enumerate(ARM_JOINTS):
+                    self._rec.log(f"joints/{j}/commanded", rr.Scalars(float(commanded[i])))
+                    self._rec.log(f"joints/{j}/measured", rr.Scalars(float(measured[i])))
+            except Exception as exc:  # The view is optional; never take teleop down.
+                logger.warning("Rerun display stopped: %s", exc)
+                return
 
     def close(self) -> None:
         if self._viewer is not None:
             self._viewer.close()
             self._viewer = None
+        if self._rec is not None:
+            self._stop.set()
+            self._wake.set()
+            # A sender stuck on a closed viewer is a daemon; do not wait on it.
+            self._sender.join(timeout=1.0)
+            self._rec = None
         if self._renderer is not None:
             self._renderer.close()
             self._renderer = None
-        if self._rec is not None:
-            self._rec.flush()
-            self._rec = None

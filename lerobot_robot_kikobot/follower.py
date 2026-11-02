@@ -8,6 +8,7 @@ goals to the servos at `stream_hz` from its own thread.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from functools import cached_property
@@ -35,6 +36,7 @@ from .feetech import (
     FeetechBus,
 )
 from .kinematics import ArmKinematics
+from .paths import home_pose_path
 from .motion import MotionShaper
 from .streamer import ServoStreamer
 
@@ -44,6 +46,22 @@ RAD_PER_STEP = 2.0 * math.pi / RESOLUTION
 # Uncalibrated default: the servo's mid-scale reading is the joint's zero,
 # which is how the arm was assembled.
 DEFAULT_HOMING = RESOLUTION // 2
+
+# Which physical way each joint's min and max lie, read off the MuJoCo model.
+# "Front" is the way the arm reaches in the ready pose; stand behind the base
+# facing it. Getting these the wrong way round flips the joint, and the IK's
+# moves then come out in the wrong directions on the real arm.
+JOINT_ENDS = {
+    "J1": ("base turned fully counter-clockwise, seen from above", "base turned fully clockwise, seen from above"),
+    "J2": ("upper arm tilted fully forward, toward the front", "upper arm tilted fully back"),
+    "J3": ("forearm bent fully up and back, the opposite way to the ready pose",
+           "forearm bent fully forward and down, the way the ready pose bends it"),
+    "J4": ("wrist tilted fully so the jaws swing back, toward the base",
+           "wrist tilted fully so the jaws swing forward and up"),
+    "J5": ("wrist swung fully to the left", "wrist swung fully to the right"),
+    "J6": ("jaws turned fully clockwise, seen from above with the jaws pointing down",
+           "jaws turned fully counter-clockwise, seen from above with the jaws pointing down"),
+}
 
 
 class KikobotFollower(Robot):
@@ -141,38 +159,79 @@ class KikobotFollower(Robot):
         if motor == "gripper":
             closed_is_min = self.config.gripper_closed_deg < self.config.gripper_open_deg
             return ("jaws closed", "jaws open") if closed_is_min else ("jaws open", "jaws closed")
-        return (f"min, {np.rad2deg(self.lower[i]):+.0f} deg", f"max, {np.rad2deg(self.upper[i]):+.0f} deg")
+        lo, hi = JOINT_ENDS[motor]
+        return (f"min ({np.rad2deg(self.lower[i]):+.0f} deg): {lo}", f"max ({np.rad2deg(self.upper[i]):+.0f} deg): {hi}")
 
-    def _motors_to_calibrate(self) -> list[str]:
+    def _calibration_plan(self) -> tuple[list[str], str]:
+        """Joints to calibrate, or "home" / "check" for those steps alone."""
         motors = list(self.motor_ids)
         if not self.calibration:
-            return motors
+            return motors, ""
         missing = [m for m in motors if m not in self.calibration]
         print(f"Calibration file: {self.calibration_fpath}")
         if missing:
             print(f"Not calibrated yet: {' '.join(missing)}")
         while True:
             answer = input(
-                "Press ENTER to keep it, type 'all' to redo every joint, or name the joints\n"
-                f"to redo, e.g. 'J3' or 'J2 gripper' ({' '.join(motors)}): "
+                "Press ENTER to keep it, or type:\n"
+                "  all            redo every joint\n"
+                "  J3, J2 gripper redo only those joints\n"
+                "  home           only set the home pose\n"
+                "  check          print the arm's angles as you pose it, to compare with the sim\n"
+                "> "
             ).replace(",", " ").split()
-            if not answer:
-                return []
-            if [a.lower() for a in answer] in (["all"], ["c"]):
-                return motors
+            words = [a.lower() for a in answer]
+            if not words:
+                return [], ""
+            if words in (["all"], ["c"]):
+                return motors, ""
+            if words in (["home"], ["check"]):
+                return [], words[0]
             names = {m.lower(): m for m in motors}
-            unknown = [a for a in answer if a.lower() not in names]
+            unknown = [a for a, w in zip(answer, words) if w not in names]
             if not unknown:
-                return [names[a.lower()] for a in answer]
+                return [names[w] for w in words], ""
             print(f"Unknown joint(s) {unknown}.")
+
+    def _check(self, bus: FeetechBus) -> None:
+        """Print the arm's joint angles, as the sim would show them, until 'q'."""
+        ready = np.rad2deg(self.kin.ready_q())
+        print(
+            "\nTorque is off, support the arm. Bend it by hand into the sim's ready pose\n"
+            "(the pose teleop starts in) and compare. A joint with the wrong sign was\n"
+            "calibrated the wrong way round: redo just that joint.\n"
+            f"  ready  {'  '.join(f'{j} {a:+6.0f}' for j, a in zip(ARM_JOINTS, ready))}"
+        )
+        while input("ENTER reads the arm, 'q' and ENTER quits: ").strip().lower() != "q":
+            q = np.rad2deg(self._from_raw(bus.read_positions()))
+            print(f"  arm    {'  '.join(f'{j} {a:+6.0f}' for j, a in zip(ARM_JOINTS, q))}")
+
+    def _set_home(self, bus: FeetechBus) -> None:
+        """Save the pose the arm is held in as the teleop's start and Y pose."""
+        path = home_pose_path(self.id, self.calibration_dir)
+        answer = input(
+            "\nHome pose (torque is off, support the arm): move it to where teleop should\n"
+            "start and where Y returns it, jaws included, then ENTER. 's' and ENTER skips: "
+        )
+        if answer.strip().lower() == "s":
+            return
+        q = self._from_raw(bus.read_positions())
+        home = {j: round(float(np.rad2deg(q[i])), 2) for i, j in enumerate(ARM_JOINTS)}
+        if self.config.gripper_id is not None:
+            home["gripper"] = round(float(np.clip(self._gripper_pct(q[6]), 0.0, 100.0)), 1)
+        outside = [j for i, j in enumerate(ARM_JOINTS) if not self.lower[i] <= q[i] <= self.upper[i]]
+        if outside:
+            print(f"  warning: {' '.join(outside)} past the model's limits; teleop will clip them.")
+        path.write_text(json.dumps(home, indent=4) + "\n")
+        print(f"Home pose {home} saved to {path}")
 
     def calibrate(self) -> None:
         """Map each joint's travel onto the model's range: min, middle, max by hand.
 
         Torque stays off the whole time, and afterwards: the servos never move.
         """
-        motors = self._motors_to_calibrate()
-        if not motors:
+        motors, only = self._calibration_plan()
+        if not motors and not only:
             return
         if self.streamer is not None:
             self.streamer.stop()
@@ -185,12 +244,13 @@ class KikobotFollower(Robot):
             # Readings are taken as actual positions; the servos keep their old
             # offset until the end, so an aborted run leaves the old calibration valid.
             old_offset = {m: bus.homing_offset(self.motor_ids[m]) for m in motors}
-            print(
-                "\nTorque is off and stays off: support the arm. For each joint, move it\n"
-                "by hand to its min end, then to any point in between, then to its max\n"
-                "end, pressing ENTER at each. Min and max are the MuJoCo model's joint\n"
-                "limits. The middle point only tells which way the joint turned.\n"
-            )
+            if motors:
+                print(
+                    "\nTorque is off and stays off: support the arm. For each joint, move it\n"
+                    "by hand to its min end, then to any point in between, then to its max\n"
+                    "end, pressing ENTER at each. Min and max are the MuJoCo model's joint\n"
+                    "limits. The middle point only tells which way the joint turned.\n"
+                )
             for motor in motors:
                 i = list(self.motor_ids).index(motor)
                 servo_id = self.motor_ids[motor]
@@ -218,26 +278,32 @@ class KikobotFollower(Robot):
                     break
             for motor, fit in fits.items():
                 bus.set_homing_offset(self.motor_ids[motor], fit.servo_offset)
+            if fits:
+                # Joints not redone keep their entry.
+                self.calibration = {
+                    **self.calibration,
+                    **{
+                        motor: MotorCalibration(
+                            id=self.motor_ids[motor],
+                            drive_mode=fit.drive_mode,
+                            homing_offset=fit.zero,
+                            range_min=fit.range_min,
+                            range_max=fit.range_max,
+                        )
+                        for motor, fit in fits.items()
+                    },
+                }
+                self._save_calibration()
+                print(f"Calibration of {' '.join(fits)} saved to {self.calibration_fpath}")
+            # Read with the new calibration, so it is in the model's angles.
+            if only == "check":
+                self._check(bus)
+            else:
+                self._set_home(bus)
         finally:
             if own_bus:
                 bus.close()
-        # Joints not redone keep their entry.
-        self.calibration = {
-            **self.calibration,
-            **{
-                motor: MotorCalibration(
-                    id=self.motor_ids[motor],
-                    drive_mode=fit.drive_mode,
-                    homing_offset=fit.zero,
-                    range_min=fit.range_min,
-                    range_max=fit.range_max,
-                )
-                for motor, fit in fits.items()
-            },
-        }
-        self._save_calibration()
-        print(f"Calibration of {' '.join(fits)} saved to {self.calibration_fpath}")
-        print("Torque is still off. lerobot-teleoperate uses this calibration from now on.")
+        print("Torque is still off. lerobot-teleoperate uses this from now on.")
 
     def configure(self) -> None:
         bus = self.bus

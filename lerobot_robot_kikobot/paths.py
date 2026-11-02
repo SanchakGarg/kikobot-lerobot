@@ -5,6 +5,7 @@ The package is installed editable (`pip install -e .`), so the repo's top-level
 for a non-editable install or a model kept elsewhere.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -32,3 +33,20 @@ def resolve_scene(scene: str) -> str:
             "to an MJCF file, or set KIKOBOT_MODELS_DIR."
         )
     return str(path)
+
+
+def home_pose_path(robot_id: str, calibration_dir: Path | None = None) -> Path:
+    """Where `lerobot-calibrate` saves the real arm's home pose, next to its calibration."""
+    if calibration_dir is None:
+        from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
+
+        calibration_dir = HF_LEROBOT_CALIBRATION / ROBOTS / "kikobot_follower"
+    return Path(calibration_dir) / f"{robot_id}_home.json"
+
+
+def load_home_pose(robot_id: str) -> dict[str, float] | None:
+    """Joint angles in degrees and `gripper` in % open, or None if none is saved."""
+    path = home_pose_path(robot_id)
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text())
