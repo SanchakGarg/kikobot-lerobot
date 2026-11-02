@@ -2,15 +2,15 @@
 
 Kiko-Bot, a 6-DOF arm, as a [LeRobot](https://github.com/huggingface/lerobot)
 plugin. The same commands and the same gamepad drive the MuJoCo simulation,
-NVIDIA Isaac Sim (Newton physics) and the real arm. The simulations run as
-servers in their own process, in real time; the real arm mirrors every move
-it makes into one of them:
+NVIDIA Isaac Sim and the real arm. Each simulation runs as a server in its
+own process, in real time. The real arm sends every command it receives to
+one of them, so the simulated arm moves with it:
 
 | LeRobot type | What it is |
 |---|---|
-| `--robot.type=kikobot_sim` | The arm in `kikobot-sim-server` (MuJoCo: empty, pick-and-place or cylinder scene) |
+| `--robot.type=kikobot_sim` | The arm in `kikobot-sim-server` (MuJoCo, optionally Newton physics) |
 | `--robot.type=kikobot_isaac` | The arm in the Isaac Sim server, Newton physics and RTX cameras ([docs/](docs/README.md)) |
-| `--robot.type=kikobot_follower` | The physical arm on Feetech STS servos, driven like an SO-101, mirrored into a sim |
+| `--robot.type=kikobot_follower` | The physical arm on Feetech STS servos, mirrored into a sim |
 | `--teleop.type=kikobot_gamepad` | 6-DOF gamepad control: full IK over all six joints |
 
 **Isaac Sim, and training on a SLURM cluster:** see [docs/](docs/README.md).
@@ -21,14 +21,14 @@ trained on it, runs on the other.
 
 ## Contents
 
-0. [Quick start: real arm + gamepad](#0-quick-start-real-arm--gamepad)
-1. [Repository layout](#1-repository-layout)
-2. [How the real arm keeps up with the sim](#2-how-the-real-arm-keeps-up-with-the-sim)
+0. [Quick start: the sim](#0-quick-start-the-sim)
+1. [Quick start: real arm + gamepad](#1-quick-start-real-arm--gamepad)
+2. [Repository layout](#2-repository-layout)
 3. [Install](#3-install)
 4. [Gamepad controls](#4-gamepad-controls)
-5. [Start the sim server and drive the sim](#5-start-the-sim-server-and-drive-the-sim)
+5. [The sim server](#5-the-sim-server)
 6. [Drive the real arm](#6-drive-the-real-arm)
-7. [Speed cap and smoothness](#7-speed-cap-and-smoothness)
+7. [Speed and smoothness](#7-speed-and-smoothness)
 8. [Record a dataset](#8-record-a-dataset)
 9. [Platform notes](#9-platform-notes)
 10. [Troubleshooting](#10-troubleshooting)
@@ -36,10 +36,46 @@ trained on it, runs on the other.
 
 ---
 
-## 0. Quick start: real arm + gamepad
+## 0. Quick start: the sim
+
+The desk sorting scene in MuJoCo, driven with a gamepad. No hardware is
+needed. Install LeRobot and this plugin first ([3](#3-install)), and plug the
+controller in before starting teleop.
+
+Terminal 1, the sim server (leave it running):
+
+```bash
+# Ubuntu
+~/lerobot/.venv/bin/kikobot-sim-server --scene desk_sort
+# macOS: MuJoCo's window needs mjpython
+~/lerobot/.venv/bin/mjpython -m lerobot_robot_kikobot.sim_server --scene desk_sort
+```
+
+Terminal 2, the gamepad:
+
+```bash
+~/lerobot/.venv/bin/lerobot-teleoperate --robot.type=kikobot_sim \
+  --teleop.type=kikobot_gamepad --fps=60
+```
+
+On Windows the same commands are
+`& "$HOME\lerobot\.venv\Scripts\kikobot-sim-server.exe" --scene desk_sort` and
+`& "$HOME\lerobot\.venv\Scripts\lerobot-teleoperate.exe" --robot.type=kikobot_sim --teleop.type=kikobot_gamepad --fps=60`.
+
+- **Back / View / Share** on the gamepad lays out a new desk; **Y** returns
+  the arm to its home pose. All controls: [4](#4-gamepad-controls).
+- Add `--display_data=true` to the teleop command to see the `record`
+  camera in rerun, and `--robot.camera_names='[record,overhead]'` for the
+  top-down camera as well.
+- Other scenes: `--scene pick_place` (a cube and a place pad),
+  `--scene cylinder` or `--scene empty` on the server ([5](#5-the-sim-server)).
+
+---
+
+## 1. Quick start: real arm + gamepad
 
 The shortest path from a fresh machine to driving the physical arm with a
-gamepad. Each step is explained in more detail in sections 3–6.
+gamepad. Sections 3–6 explain each step in detail.
 
 **Before you start**
 
@@ -151,11 +187,11 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 ### Once it is running
 
 - The arm first holds where it is, then moves slowly (30°/s) to the home pose.
-- The sim server's window shows the simulated arm getting the same commands
-  as the real one, on the same tick: the two should move together. If the
-  real arm does something the sim does not, `--display_data=true` plots each
-  joint's commanded (action) and measured (observation) angle in rerun.
-  Without the server the real arm runs anyway; the log says the mirror is off.
+- The sim server's window shows the simulated arm receiving the same
+  commands as the real one, on the same tick, so the two move together.
+  `--display_data=true` plots each joint's commanded (action) and measured
+  (observation) angle in rerun. Without a sim server the real arm still
+  runs, and the log reports that the mirror is off.
 - After calibration every joint's direction and range come from what you
   measured. Without a calibration file, J5 is inverted by default because
   its servo turns opposite to the model ([joint direction](#joint-direction)).
@@ -170,7 +206,7 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 
 ---
 
-## 1. Repository layout
+## 2. Repository layout
 
 | Path | What's in it |
 |---|---|
@@ -191,39 +227,6 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 | `lerobot_robot_kikobot/calibration.py` | Fits each joint's min/middle/max readings onto the model's range. |
 | `udev/99-kikobot.rules` | Ubuntu: serial port permissions and a stable `/dev/kikobot` name. |
 | `tests/` | Speed cap, droop correction, calibration, sim server, real arm (fake bus) and Isaac client tests (no hardware or Isaac Sim needed). |
-
----
-
-## 2. How the real arm keeps up with the sim
-
-The arm is driven the way LeRobot drives its SO-101 follower, which tracks
-its leader arm with no visible lag:
-
-```
-gamepad ─► IK (teleop) ─► joint target ─► send_action ─┬─► speed cap ─► sync write ─► servos
-             60 Hz loop                                  │   (no reply, < 1 ms, all servos in one packet)
-                                                         └─► same command ─► sim server ─► sim arm
-```
-
-- **The goal goes straight to the servos.** `send_action` writes it to every
-  servo in one sync-write packet, on the tick it arrives. Nothing filters or
-  delays it. `get_observation` reads all positions back in one sync read.
-- **The same command goes to the sim, on the same tick.** The sim server's
-  actuators and the real servos chase the identical goal, so the two arms
-  move together, and the sim shows exactly what the servos were told.
-- **Smooth targets come from the gamepad.** The sticks are low-passed, IK
-  turns the pose into joints, and Y glides home along a minimum-jerk path, so
-  there is nothing for the robot side to smooth. Run the loop at
-  `--fps=60` (LeRobot's teleoperate default is 60, record's is 30).
-- **Only a speed cap.** A target that jumps (a policy's first action, the
-  arm's pose at power-up) is reached at no more than `max_velocity_deg_s`
-  (180°/s); the first move after connecting at `soft_start_deg_s` (30°/s).
-  Under the cap, targets pass through untouched.
-- **Servo gains.** P = 16, D = 32, acceleration 254: SO-101's values.
-
-An earlier version smoothed every command with a trajectory follower and a
-Klipper-style input shaper. That added about 170 ms between the sim and the
-real arm; it is gone.
 
 ---
 
@@ -327,7 +330,7 @@ too high overshoots), `precision_scale` (0.3), `joystick` (0),
 
 ---
 
-## 5. Start the sim server and drive the sim
+## 5. The sim server
 
 The simulation is its own process. Start it first and leave it running:
 
@@ -339,15 +342,19 @@ On macOS, MuJoCo's window needs `mjpython`:
 `$V/mjpython -m lerobot_robot_kikobot.sim_server --scene pick_place`.
 Without a display, add `--no-viewer`.
 
+Physics runs in real time from the moment the server starts. A client's
+`command` sets the joint targets and physics moves the arm there, as the
+servos do with the same goal. The log prints the real-time factor every 10 s.
+
 **The lab.** Every scene puts the arm on a grey lab table in a makerspace:
 grey epoxy floor, a window with daylight, six LED ceiling panels, a
 workbench with a pegboard of tools and a 3D printer behind the arm,
-shelving with storage bins, a whiteboard and a stool. It is described once,
-in `lerobot_robot_kikobot/env/room.py`, and the Isaac Sim server builds the
-same room from the same file. **The light changes on every reset**: dimmer
-level, colour temperature (3800–6500 K), panels switched off, the sun on or
-off and its angle. So a policy trained here has seen many lightings;
-`--fixed-lighting` keeps it the same.
+shelving with storage bins, a whiteboard and a stool. The room is described
+once, in `lerobot_robot_kikobot/env/room.py`, and the Isaac Sim server builds
+the same room from that file. **The lighting changes on every reset**:
+dimmer level, colour temperature (3800–6500 K), panels switched off, and
+the sun on or off at a random angle, so that recorded datasets cover a range
+of lighting. `--fixed-lighting` disables this.
 
 | Scene | On the table |
 |---|---|
@@ -356,9 +363,7 @@ off and its angle. So a policy trained here has seen many lightings;
 | `desk_sort` | A stationery sorting station: a pen cup, a marker cup, a tape peg, trays and a note mat around the arm, and 32 pens, pencils, markers, highlighters, tapes, glue sticks, erasers, sticky notes, scissors, a stapler, a ruler, ... of which a random selection (14 on average) lies in front of it, each with a random colour and texture, pens sometimes piled up ([details](docs/isaac-sim-teleop.md#desk-sorting-station)) |
 | `empty` | Nothing |
 
-Physics runs in real time from the start. A `command` from a client only
-sets the joint targets, and physics takes the arm there, as the servos do.
-The log prints the real-time factor every 10 s. Then, in a second terminal:
+Drive it from a second terminal:
 
 ```bash
 $V/lerobot-teleoperate --robot.type=kikobot_sim --teleop.type=kikobot_gamepad --fps=60
@@ -373,11 +378,10 @@ to accept other machines), `--port` (5556), `--window` (`mujoco`, `newton`,
 `--fixed-lighting`, `--engine` and `--renderer` (below).
 
 <a id="newton"></a>**Newton physics and ray-traced cameras (NVIDIA GPU).** The
-server can step the physics with NVIDIA's [Newton](https://github.com/newton-physics/newton)
+server can step the physics with NVIDIA [Newton](https://github.com/newton-physics/newton)
 (its MuJoCo solver, run on the GPU by MuJoCo Warp) and render the cameras
-with MuJoCo Warp's ray tracer: ray-traced shadows, textures and
-anti-aliasing, instead of OpenGL shadow maps. Install the extra into the
-same venv on the GPU machine:
+with the MuJoCo Warp ray tracer, which adds ray-traced shadows and
+anti-aliasing. Install the extra into the same venv on the GPU machine:
 
 ```bash
 $V/pip install -e ".[newton]"      # Newton, Warp, MuJoCo Warp; pins MuJoCo 3.15
@@ -390,14 +394,13 @@ $V/kikobot-sim-server --scene desk_sort --engine newton --renderer mjwarp
 | `--renderer` | `opengl`, `mjwarp` (GPU ray tracing) | `auto`: `mjwarp` with the Newton engine on a GPU |
 | `--window` | `mujoco` (the full scene, with either engine), `newton` (Newton's ViewerGL, plain colours) | `mujoco` |
 
-Either way the scene is the same: the server's MuJoCo model, with the lab
-and the desk looks, stays the scene of record; Newton gets it as MJCF and
-steps it, and the joint positions come back by name each step. The servo
-model is the same too (an import would drop the actuators' damping; it is
-written out explicitly), so a commanded joint moves the same way on both
-engines. On a Mac or any machine without CUDA, `--engine newton` runs
-Newton with MuJoCo's C solver, and `mjwarp` on Warp's CPU backend (seconds
-per frame): fine for checking it works, not for teleop.
+The scene is identical with either engine. The server keeps its MuJoCo
+model (room, desk, materials) as the scene of record, Newton receives it as
+MJCF, and joint positions are copied back by name after every step. The
+servo model, including the actuators' damping, is the same, so a commanded
+joint moves the same way on both engines. Without CUDA, `--engine newton`
+falls back to MuJoCo's C solver and `--renderer mjwarp` runs on Warp's CPU
+backend at several seconds per frame, which is too slow for teleop.
 
 Sim robot options (`--robot.<name>=`): `host` / `port` (where the server
 is), `camera_names` (`[record]`; `overhead` too), `width` / `height`
@@ -648,10 +651,13 @@ Follower options (`--robot.<name>=`):
 
 ---
 
-## 7. Speed cap and smoothness
+## 7. Speed and smoothness
 
-The robot side only caps speed (section 2). What makes the motion smooth is
-the gamepad and the loop rate:
+Each `send_action` writes its goal straight to all servos in one
+sync-write packet, as LeRobot's SO-101 does, and sends the same command to
+the sim server; only a joint speed cap sits in between. The smoothness of
+the motion comes from the gamepad (low-passed sticks, a minimum-jerk glide
+home on Y) and from the loop rate:
 
 | To change | Option |
 |---|---|
@@ -724,13 +730,13 @@ to about 1 ms on all three.
 | Gamepad moves come out in the wrong directions (e.g. X/Y moves the arm up and down) | One or more joints are calibrated the wrong way round. Run calibrate, type `check`, and compare with the sim's ready pose ([check the directions](#check-directions)); `flip` each joint with the wrong sign. |
 | A joint moves the wrong way (opposite to the sim) | Compare the real arm with the sim window, or with `--display_data=true` (a joint's measured line moves opposite to its commanded line). Calibrated: calibrate and type `flip <joint>` ([flip a joint](#flip-joint)). Uncalibrated: list it in `--robot.inverted_joints` (default `[J5]`), e.g. `'[J5,J3]'` ([6](#joint-direction)). |
 | Real arm stops short of, or overshoots, the sim's pose | Redo [calibration](#calibration) with each joint pushed fully to the ends the model shows. |
-| Arm wobbles after stopping | Lower the teleop speeds or `--teleop.stop_rate_per_s` ([7](#7-speed-cap-and-smoothness)). |
+| Arm wobbles after stopping | Lower the teleop speeds or `--teleop.stop_rate_per_s` ([7](#7-speed-and-smoothness)). |
 | Real arm lags behind the sim | Run teleop at `--fps=60`; check the servos got P = 16 (the log at connect); a loaded joint lags most, see [sag](#sag). |
 | J2 (or another joint) hangs lower than the sim | Droop under load: corrected for `--robot.sag_joints` (default `[J2]`) while the arm holds still ([sag](#sag)). Add others, e.g. `'[J2,J3]'`. |
 | A joint sits off the sim by the same amount everywhere, even after calibration | Its stops are not symmetric about its zero: calibrate and type `zero <joint>` ([re-zero a joint](#zero-joint)). |
-| A tiny stick nudge makes the arm jump, then creep the rest of the way | Stick-slip in the servo: with a soft position gain, a slowly creeping goal does not move the servo until the gear friction gives, then it jumps, and the soft gain makes the last bit slow. Raise the gain: `--robot.p_coefficient=24` (try 32; lower it again if a joint buzzes). Letting go of the stick now stops the motion at once (`--teleop.stop_rate_per_s`). |
+| A tiny stick nudge makes the arm jump, then creep the rest of the way | Stick-slip in the servo: with a soft position gain, a slowly creeping goal does not move the servo until the gear friction gives, then it jumps, and the soft gain makes the last bit slow. Raise the gain: `--robot.p_coefficient=24` (try 32; lower it again if a joint buzzes). Releasing the stick stops the motion within `--teleop.stop_rate_per_s`. |
 | Servo buzzes while holding | Lower `--robot.p_coefficient` (try 12). |
-| `Servo stream stopped` | The bus failed repeatedly: check power and cable. The log has the cause. |
+| `25 position reads in a row failed` | The bus failed repeatedly: check power and cable. The log has the cause. |
 
 ---
 
