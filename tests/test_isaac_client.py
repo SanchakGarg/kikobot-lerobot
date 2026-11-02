@@ -51,6 +51,7 @@ class FakeBackend(srv.Backend):
         self.desks = []
         self.steps = 0
         self.configured = []
+        self.lightings = []
 
     def configure(self, physics_dt, width, height, cameras, scene):
         self.configured.append(scene)
@@ -68,6 +69,9 @@ class FakeBackend(srv.Backend):
 
     def randomize_desk(self, placements):
         self.desks.append(placements)
+
+    def set_lighting(self, states):
+        self.lightings.append(states)
 
     def set_targets(self, q, finger):
         self.targets = (q.copy(), finger)
@@ -194,6 +198,21 @@ def test_gamepad_back_button_resets_scene(start_server):
         assert len(backend.respawns) == 2  # one reset per press
     finally:
         robot.disconnect()
+
+
+def test_each_reset_relights_the_room(start_server):
+    backend, port = start_server()
+    robot = _robot(port)
+    robot.connect()
+    try:
+        events.request_scene_reset()
+        robot.send_action({})
+    finally:
+        robot.disconnect()
+    assert len(backend.lightings) == 2
+    names = {s.name for s in backend.lightings[0]}
+    assert {"sun", "panel_00"} <= names
+    assert [s.temp_k for s in backend.lightings[0]] != [s.temp_k for s in backend.lightings[1]]
 
 
 def test_same_seed_same_spawns(start_server):

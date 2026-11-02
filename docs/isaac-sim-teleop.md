@@ -42,6 +42,8 @@ Server options (`--name value`):
 | `--seed` | random | Fixes where things spawn: the same seed gives the same sequence of scenes |
 | `--physics-dt` | 0.002 | Physics step, seconds |
 | `--render-hz` | 30 | How often the window is redrawn |
+| `--fixed-lighting` | off | The same room light every reset (by default it varies, see [the lab](#the-lab)) |
+| `--light-scale` | 1.0 | Scale every room light, if the images come out too dark or too bright |
 | `--headless` | off | No window. Saves about 1 GB of VRAM. Camera images are still rendered. |
 | `--livestream` | off | With `--headless`: watch in the Isaac Sim WebRTC Streaming Client |
 | `--bind` | `tcp://127.0.0.1:5557` | Address to listen on (the MuJoCo server has 5556, so both can run) |
@@ -102,6 +104,22 @@ a fixed seed:
 & "$I\python.exe" isaac\kikobot_isaac_server.py --scene cylinder --seed 7
 & "$V\lerobot-teleoperate.exe" --robot.type=kikobot_isaac --teleop.type=kikobot_gamepad --fps=60
 ```
+
+## The lab
+
+Every scene puts the arm on a grey lab table in a makerspace, the same room
+as the MuJoCo server's, built from the same description
+(`lerobot_robot_kikobot/env/room.py`) by `isaac/room_usd.py`: grey epoxy
+floor, off-white walls, a strip window with daylight, six LED ceiling panels
+(RectLights), a workbench with a pegboard of tools and a 3D printer behind
+the arm, steel shelving with storage bins, a whiteboard and a stool. A faint
+dome light stands in for the light bouncing around a real room.
+
+On every reset the light changes: the panels' dimmer level and colour
+temperature (3800–6500 K, all panels alike), some panels switched off, the
+sun on or off, and its angle through the window. `--fixed-lighting` turns
+that off. RTX exposure differs between machines; if the images look too
+dark or washed out, start the server with `--light-scale 0.5` or `2`.
 
 ## Mirror the real arm into Isaac Sim
 

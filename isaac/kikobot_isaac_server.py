@@ -55,14 +55,6 @@ SPAWN_RADIUS_M = (0.22, 0.32)
 SPAWN_HALF_ANGLE_RAD = math.radians(40.0)
 MIN_OBJECT_PAD_GAP_M = 0.12
 SCENES = ("empty", "pick_place", "cylinder", "desk_sort")
-CAMERAS = ("record", "overhead")
-# name: (eye, target, up, vertical fov deg).
-# record: in front of the table on +X, aimed at the base, as in pick_place_scene.xml.
-# overhead: straight down on the desk, top of the image towards +X.
-CAMERA_POSES = {
-    "record": ((0.78, 0.0, 0.34), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 48.0),
-    "overhead": ((0.18, 0.0, 0.80), (0.18, 0.0, 0.0), (1.0, 0.0, 0.0), 50.0),
-}
 # desk_sort: physics run with the arm held at ready after each respawn, so
 # stacked pens drop and come to rest before the episode starts.
 SETTLE_S = 0.6
@@ -80,10 +72,19 @@ def _load(name: str, path: Path):
 
 
 proto = _load("kikobot_protocol", PKG / "protocol.py")
+# The lab, shared with the MuJoCo scene, and its USD builder.
+room = _load("kikobot_room", PKG / "env" / "room.py")
 # The desk sorting station (no Isaac Sim imports at module level either).
 desk_layout = _load("desk_layout", PKG / "desk" / "layout.py")
 _load("desk_textures", PKG / "desk" / "textures.py")
 desk_assets = _load("desk_assets", HERE / "desk_assets.py")
+room_usd = _load("room_usd", HERE / "room_usd.py")
+
+LAB = room.lab_room()
+# name: (eye, target, up, vertical fov deg), the same as the MuJoCo scene's.
+CAMERA_POSES = {c.name: (c.eye, c.target, c.up, c.fovy) for c in LAB.cameras}
+CAMERAS = tuple(CAMERA_POSES)
+DEFAULT_ROOM_TEXTURES = MODELS / "textures" / "room"
 
 
 # ------------------------------------------------------------------ the model
@@ -152,6 +153,7 @@ class Backend:
     # desk_sort: the items that exist (with real sizes), and one episode's layout.
     desk_pool: list = []
     def randomize_desk(self, placements: list) -> None: ...
+    def set_lighting(self, states: list) -> None: ...  # room.LightState, one per light
     def set_targets(self, q: np.ndarray, finger: float) -> None: ...
     def physics_step(self) -> None: ...
     def render(self) -> None: ...
@@ -174,6 +176,7 @@ class KikobotServer:
         physics_dt: float = PHYSICS_DT_S,
         seed: int | None = None,
         settle_s: float = SETTLE_S,
+        randomize_lighting: bool = True,
     ):
         unknown = [c for c in cameras if c not in CAMERAS]
         if unknown:
@@ -185,6 +188,7 @@ class KikobotServer:
         self.width, self.height = width, height
         self.physics_dt = physics_dt
         self.settle_s = settle_s
+        self.randomize_lighting = randomize_lighting
         self.placements: list = []
         self.lower = np.array([limits[j][0] for j in ARM_JOINTS])
         self.upper = np.array([limits[j][1] for j in ARM_JOINTS])
@@ -245,6 +249,7 @@ class KikobotServer:
         ready = self._q(req, "ready_deg")
         self.gripper_pct = 100.0
         self.b.reset_arm(ready, self._finger(100.0))
+        self.b.set_lighting(room.sample_lighting(self.rng, LAB) if self.randomize_lighting else room.fixed_lighting(LAB))
         if self.scene == "desk_sort":
             self.placements = desk_layout.sample_desk(self.rng, self.b.desk_pool)
             self.b.randomize_desk(self.placements)
@@ -451,16 +456,14 @@ class IsaacNewtonBackend(Backend):
         log.info("Scene %r ready: dofs %s, physics dt %.5f s.", scene, names, self.dt)
 
     def _build_world(self, stage, scene: str) -> None:
-        from pxr import Gf, Sdf, UsdGeom, UsdLux, UsdPhysics, UsdShade
+        from pxr import Gf, Sdf, UsdGeom, UsdPhysics, UsdShade
 
         UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
         UsdGeom.SetStageMetersPerUnit(stage, 1.0)
         UsdGeom.Xform.Define(stage, "/World")
         stage.SetDefaultPrim(stage.GetPrimAtPath("/World"))
-        UsdLux.DomeLight.Define(stage, "/World/Lights/Dome").CreateIntensityAttr(600)
-        sun = UsdLux.DistantLight.Define(stage, "/World/Lights/Sun")
-        sun.CreateIntensityAttr(2500)
-        UsdGeom.Xformable(sun).AddRotateXYZOp().Set(Gf.Vec3f(-35, 20, 0))
+        # The lab, its lights and the arm's grey table (env/room.py), the same as MuJoCo's.
+        self.room_lights = room_usd.build_room(stage, LAB, Path(self.args.room_textures), self.args.light_scale)
 
         def material(path: str, rgb, friction: float | None = None):
             mat = UsdShade.Material.Define(stage, path)
@@ -490,24 +493,10 @@ class IsaacNewtonBackend(Backend):
             bind(g.GetPrim(), mat)
             return g
 
-        floor_z = 0.0 if scene == "empty" else -0.4
-        floor = material("/World/Looks/Floor", (0.15, 0.22, 0.3), friction=1.0)
-        box("/World/Floor", (0, 0, floor_z - 0.05), (5, 5, 0.05), floor)
         self.object_paths: dict[str, str] = {}
         self.desk_pool = []
         if scene == "empty":
             return
-
-        # Table: top face at z = 0, flush with the arm's base plate.
-        top = material("/World/Looks/Tabletop", (0.72, 0.58, 0.43), friction=1.5)
-        frame = material("/World/Looks/TableFrame", (0.28, 0.29, 0.32))
-        box("/World/Table/Top", (0, 0, -0.01), (0.5, 0.5, 0.01), top)
-        for i, (x, y) in enumerate(((0.45, 0.45), (-0.45, 0.45), (0.45, -0.45), (-0.45, -0.45))):
-            leg = UsdGeom.Cylinder.Define(stage, f"/World/Table/Leg{i}")
-            leg.CreateRadiusAttr(0.022)
-            leg.CreateHeightAttr(0.38)
-            UsdGeom.Xformable(leg).AddTranslateOp().Set(Gf.Vec3d(x, y, -0.21))
-            bind(leg.GetPrim(), frame)
 
         if scene == "desk_sort":
             self._build_desk(stage)
@@ -671,6 +660,9 @@ class IsaacNewtonBackend(Backend):
         self.desk_view.set_velocities(linear_velocities=zeros, angular_velocities=zeros)
         desk_assets.apply_looks(self.desk, placements)
 
+    def set_lighting(self, states: list) -> None:
+        self.room_lights.apply(states)
+
     def set_targets(self, q: np.ndarray, finger: float) -> None:
         idx = [*self.arm_idx, *self.finger_idx]
         vals = np.array([[*q, *([finger] * len(self.finger_idx))]], dtype=np.float32)
@@ -727,6 +719,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--physics-dt", type=float, default=PHYSICS_DT_S, help="Physics step, seconds.")
     p.add_argument("--render-hz", type=float, default=30.0, help="Window redraw rate.")
+    p.add_argument("--fixed-lighting", action="store_true", help="The same room light every reset.")
+    p.add_argument("--light-scale", type=float, default=1.0,
+                   help="Scale every room light (RTX exposure differs between machines).")
+    p.add_argument("--room-textures", default=str(DEFAULT_ROOM_TEXTURES),
+                   help="Where the room's texture PNGs are written (once).")
     p.add_argument("--headless", action="store_true", help="No Isaac Sim window.")
     p.add_argument("--livestream", action="store_true",
                    help="With --headless: stream the viewport (Isaac Sim WebRTC Streaming Client).")
@@ -769,6 +766,7 @@ def main(argv=None) -> None:
         server = KikobotServer(
             backend, mjcf_limits(), args.scene, tuple(args.cameras), args.width, args.height,
             args.physics_dt, args.seed, settle_s=args.settle_s,
+            randomize_lighting=not args.fixed_lighting,
         )
         serve(server, args.bind, keep_running=app.is_running, idle=backend.render, render_hz=args.render_hz)
     except KeyboardInterrupt:

@@ -29,7 +29,8 @@ import numpy as np
 
 from .config import ARM_JOINTS
 from .kinematics import ArmKinematics
-from .paths import SCENES, resolve_scene
+from .env.mujoco_scene import SCENE_NAMES, RoomLights, build_scene
+from .env.room import fixed_lighting, lab_room, sample_lighting
 from .protocol import DEFAULT_PORT, IMAGE_ENCODINGS, PROTOCOL_VERSION, pack, pack_observation, unpack
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,21 @@ MIN_OBJECT_PAD_GAP_M = 0.12
 class SimWorld:
     """The MuJoCo model and data, and everything the protocol can do to them."""
 
-    def __init__(self, scene: str = "pick_place", seed: int | None = None, timestep: float = PHYSICS_DT_S):
+    def __init__(
+        self,
+        scene: str = "pick_place",
+        seed: int | None = None,
+        timestep: float = PHYSICS_DT_S,
+        randomize_lighting: bool = True,
+    ):
         self.scene = scene
-        m = self.model = mujoco.MjModel.from_xml_path(resolve_scene(scene))
+        if scene in SCENE_NAMES:
+            # The arm in the lab (env/room.py), with the task on its table.
+            self.room = lab_room()
+            m = self.model = build_scene(scene, self.room).compile()
+        else:
+            self.room = None
+            m = self.model = mujoco.MjModel.from_xml_path(scene)
         m.opt.timestep = timestep
         self.data = mujoco.MjData(m)
         self.rng = np.random.default_rng(seed)
@@ -79,6 +92,8 @@ class SimWorld:
         pad = id_of(mujoco.mjtObj.mjOBJ_BODY, "place_pad")
         self._pad_mocap = int(m.body_mocapid[pad]) if pad >= 0 else -1
 
+        self.randomize_lighting = randomize_lighting
+        self._lights = RoomLights(m, self.room) if self.room is not None else None
         self.ready = ArmKinematics().ready_q()
         self._renderers: dict[tuple[int, int], mujoco.Renderer] = {}
         self.reset()
@@ -122,6 +137,10 @@ class SimWorld:
     def reset(self, ready: np.ndarray | None = None) -> None:
         """Arm to the ready pose, jaws open, object and pad respawned."""
         mujoco.mj_resetData(self.model, self.data)
+        if self._lights is not None:
+            self._lights.apply(
+                sample_lighting(self.rng, self.room) if self.randomize_lighting else fixed_lighting(self.room)
+            )
         self._respawn_objects()
         self.pose(self.ready if ready is None else ready, 100.0)
 
@@ -298,15 +317,17 @@ class SimServer:
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="kikobot-sim-server", description=__doc__.split("\n\n")[0])
-    p.add_argument("--scene", default="pick_place", help=f"{' | '.join(SCENES)}, or a path to an MJCF file")
+    p.add_argument("--scene", default="pick_place",
+                   help=f"{' | '.join(SCENE_NAMES)} (the arm in the lab), or a path to an MJCF file")
     p.add_argument("--host", default="127.0.0.1", help="address to listen on (0.0.0.0 for other machines)")
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--no-viewer", dest="viewer", action="store_false", help="run without the MuJoCo window")
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--timestep", type=float, default=PHYSICS_DT_S, help="physics step, seconds")
+    p.add_argument("--fixed-lighting", action="store_true", help="the same room light every reset")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    world = SimWorld(args.scene, args.seed, args.timestep)
+    world = SimWorld(args.scene, args.seed, args.timestep, randomize_lighting=not args.fixed_lighting)
     server = SimServer(world, args.host, args.port, args.viewer)
     try:
         server.serve()
