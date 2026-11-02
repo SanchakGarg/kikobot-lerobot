@@ -77,13 +77,19 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ~/lerobot/.venv/bin/lerobot-teleoperate --robot.type=kikobot_sim --robot.viewer=true \
   --teleop.type=kikobot_gamepad
 
-# 7. Drive the real arm. A rerun window opens with the simulated arm.
+# 7. Calibrate the real arm once, so it moves like the sim (see below).
+~/lerobot/.venv/bin/lerobot-calibrate --robot.type=kikobot_follower \
+  --robot.port=/dev/ttyACM0 --robot.id=kikobot
+
+# 8. Drive the real arm. A rerun window opens with the simulated arm.
 ~/lerobot/.venv/bin/lerobot-teleoperate --robot.type=kikobot_follower \
   --robot.port=/dev/ttyACM0 --robot.id=kikobot \
   --teleop.type=kikobot_gamepad
 ```
 
 Replace `/dev/ttyACM0` with what step 5 printed (or `/dev/kikobot`).
+Step 7 walks you through every joint: min, any middle point, max
+([calibration](#calibration)).
 To check the controller is seen by Linux: `ls /dev/input/by-id/ | grep -i joystick`.
 
 ### Windows 10 / 11 (PowerShell)
@@ -114,15 +120,21 @@ cd $HOME\kikobot-lerobot
   --robot.type=kikobot_sim --robot.viewer=true `
   --teleop.type=kikobot_gamepad
 
-# 5. Drive the real arm. A rerun window opens with the simulated arm.
+# 5. Calibrate the real arm once, so it moves like the sim (see below).
+& "$HOME\lerobot\.venv\Scripts\lerobot-calibrate.exe" `
+  --robot.type=kikobot_follower --robot.port=COM3 --robot.id=kikobot
+
+# 6. Drive the real arm. A rerun window opens with the simulated arm.
 & "$HOME\lerobot\.venv\Scripts\lerobot-teleoperate.exe" `
   --robot.type=kikobot_follower --robot.port=COM3 --robot.id=kikobot `
   --teleop.type=kikobot_gamepad
 ```
 
 Replace `COM3` with the port from step 3 (also listed in Device Manager →
-Ports (COM & LPT)). The servo adapter needs its USB-serial driver: CH340/CH343
-adapters (Feetech URT-1, Waveshare) from the WCH website, FTDI from ftdichip.com.
+Ports (COM & LPT)). Step 5 walks you through every joint: min, any middle
+point, max ([calibration](#calibration)). Keep the same `--robot.id` in both
+commands: it names the calibration file. The servo adapter needs its
+USB-serial driver: CH340/CH343 adapters (Feetech URT-1, Waveshare) from the WCH website, FTDI from ftdichip.com.
 For FTDI adapters, set Device Manager → the port → Port Settings → Advanced →
 Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 
@@ -134,17 +146,17 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
   joint of commanded vs measured angle. If the real arm does something the
   picture does not, the plots show which joint. `--robot.display=mujoco`
   shows the same in a MuJoCo window instead; `none` turns it off.
-- J5 is inverted by default because its servo turns opposite to the model.
-  If a joint moves the wrong way on your arm, see
-  [joint direction](#joint-direction) in section 6.
+- After calibration every joint's direction and range come from what you
+  measured. Without a calibration file, J5 is inverted by default because
+  its servo turns opposite to the model ([joint direction](#joint-direction)).
 - Left stick and LT/RT move the gripper; right stick and LB/RB rotate it;
   hold A to close, B to open; X toggles precision mode; Y returns to ready.
   Full table in [section 4](#4-gamepad-controls).
 - **Ctrl+C** stops teleop. Torque stays on so the arm does not drop; power
   the servos off, or add `--robot.disable_torque_on_disconnect=true`, to let
   it go limp.
-- If a joint turns the wrong way or the zero pose is off, calibrate once
-  ([section 6](#6-drive-the-real-arm)).
+- If a joint turns the wrong way or does not line up with the sim,
+  calibrate again ([calibration](#calibration)).
 
 ---
 
@@ -162,9 +174,10 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 | `lerobot_robot_kikobot/streamer.py` | Background thread streaming goals to the servos at 100 Hz. |
 | `lerobot_robot_kikobot/feetech.py` | Sync read/write over the Feetech bus. |
 | `lerobot_robot_kikobot/sim.py`, `follower.py`, `gamepad.py` | The three LeRobot devices. |
+| `lerobot_robot_kikobot/calibration.py` | Fits each joint's min/middle/max readings onto the model's range. |
 | `scripts/measure_resonance.py` | Measures a joint's ringing frequency to tune the shaper. |
 | `udev/99-kikobot.rules` | Ubuntu: serial port permissions and a stable `/dev/kikobot` name. |
-| `tests/` | Motion-shaper tests (no hardware needed). |
+| `tests/` | Motion-shaper and calibration tests (no hardware needed). |
 
 ---
 
@@ -329,20 +342,55 @@ or a path to an MJCF file), `fps` (30), `width` / `height` (640 / 480),
 `/dev/ttyACM0` (or `/dev/ttyUSB0`) on Ubuntu, or `/dev/kikobot` with the udev
 rule installed.
 
-**2. Calibrate (once).** Not strictly required: without a calibration file,
-each servo's mid-scale reading (2048) is taken as the joint's zero, which
-is how the arm was assembled. To set the zero precisely:
+<a id="calibration"></a>**2. Calibrate (once).** This matches the real
+arm to the sim: each joint's two ends are mapped onto the MuJoCo model's
+joint limits, so a command of, say, J2 = -125° puts the real J2 at the same
+place as the model's.
+
+Ubuntu:
 
 ```bash
-$V/lerobot-calibrate --robot.type=kikobot_follower --robot.port=/dev/ttyACM0 --robot.id=kikobot
+~/lerobot/.venv/bin/lerobot-calibrate --robot.type=kikobot_follower \
+  --robot.port=/dev/ttyACM0 --robot.id=kikobot
 ```
 
-Torque goes off. Move the arm by hand to the model's zero pose (all joints
-at mid-travel, the arm pointing straight up, as in `models/scene.xml` in the
-MuJoCo viewer) and press Enter. The file is saved under
-`~/.cache/huggingface/lerobot/calibration/robots/kikobot_follower/kikobot.json`.
-If a joint turns the wrong way, add it to `--robot.inverted_joints`
-([joint direction](#joint-direction)) or set its `drive_mode` to `1` in that file.
+Windows (PowerShell):
+
+```powershell
+& "$HOME\lerobot\.venv\Scripts\lerobot-calibrate.exe" `
+  --robot.type=kikobot_follower --robot.port=COM3 --robot.id=kikobot
+```
+
+If a calibration file exists, type `c` and Enter to redo it. Then:
+
+1. Torque goes off and the arm goes limp: hold it.
+2. A rerun window shows the model with one joint at a time posed at the
+   end you should move to (`--robot.display=none` turns it off; the
+   terminal also prints the limit in degrees).
+3. For each joint, J1 to J6 (and the gripper if `--robot.gripper_id` is set),
+   move it by hand and press Enter at each of:
+   - **min**: the joint's lower limit, as the model shows it;
+   - **middle**: anywhere in between. It is only used to tell which way
+     the joint turned from min to max, so a joint whose travel passes the
+     servo's 4095 → 0 wrap is still read right;
+   - **max**: the joint's upper limit.
+4. Each joint prints its travel in servo steps and how it compares with
+   the servo's nominal 4096 steps per turn. A warning means the measured
+   travel is more than 15 % off the model's: type `r` to redo that joint
+   with it pushed fully to its ends, or Enter to keep it (e.g. a geared joint).
+
+What is stored: each servo's Homing_Offset register is set so that the
+middle of its travel reads 2048 (the range never wraps), and the file
+`~/.cache/huggingface/lerobot/calibration/robots/kikobot_follower/kikobot.json`
+(`%USERPROFILE%\.cache\...` on Windows) gets, per joint, the readings at
+its two ends (`range_min` / `range_max`), its direction (`drive_mode`) and
+its reading at the model's zero (`homing_offset`). Positions in between are
+linear, and goals are clamped to the measured ends. Ctrl+C before the last
+joint leaves the old calibration in place.
+
+Without a calibration file the arm still runs: each servo's mid-scale
+reading (2048) is taken as the joint's zero, which is how the arm was
+assembled, and `--robot.inverted_joints` sets the directions.
 
 **3. Teleoperate.**
 
@@ -381,9 +429,10 @@ the left panel.
 that they turn opposite to the model. `--robot.inverted_joints` lists those
 joints and defaults to `[J5]`, which is how the Kiko-Bot is built. To change
 it, pass the full list: `--robot.inverted_joints='[J5,J3]'`, or
-`--robot.inverted_joints='[]'` for none. It applies with or without a
-calibration file. A `drive_mode` of `1` in the calibration file flips a
-joint as well, so a joint flipped in both places turns the normal way.
+`--robot.inverted_joints='[]'` for none. It only applies without a
+calibration: [calibration](#calibration) measures each joint's direction,
+so a calibrated joint ignores this list. If a calibrated joint turns the
+wrong way, its min and max were swapped: calibrate again.
 
 Follower options (`--robot.<name>=`):
 
@@ -394,7 +443,7 @@ Follower options (`--robot.<name>=`):
 | `servo_ids` | `[1,2,3,4,5,6]` | Bus IDs of J1..J6 |
 | `gripper_id` | none | Bus ID of a gripper servo, if fitted |
 | `gripper_open_deg` / `gripper_closed_deg` | `0` / `-60` | Gripper servo angle at 100 % / 0 % |
-| `inverted_joints` | `[J5]` | Joints whose servo turns opposite to the model |
+| `inverted_joints` | `[J5]` | Joints whose servo turns opposite to the model (uncalibrated only) |
 | `cameras` | none | LeRobot cameras, e.g. `"{front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}"` |
 | `stream_hz` | `100` | Goal stream rate |
 | `read_every` | `3` | Read positions every Nth stream tick (≈33 Hz) |
@@ -491,7 +540,8 @@ all three with Python 3.11+.
 | `No gamepad found` | Plug the controller in, then restart (it is only detected at startup). The log lists every joystick GLFW sees; on Ubuntu, if none appear, run `sudo usermod -aG input $USER` and log in again. Xbox pads unknown to GLFW get the xpad layout automatically. |
 | Wrong device used as the gamepad | Pick its slot from the `Joystick slot N` log lines: `--teleop.joystick=N`. |
 | `Settings schema 'org.gnome.settings-daemon.plugins.xsettings' does not contain a key named 'antialiasing'` (Ubuntu) | Launched from a Snap app's terminal (e.g. Snap VS Code). Run from a normal terminal, or install VS Code from the `.deb`. |
-| A joint moves the wrong way (opposite to the sim) | Compare the real arm with the rerun view (a joint's measured line moves opposite to its commanded line), then list it in `--robot.inverted_joints` (default `[J5]`), e.g. `'[J5,J3]'` ([6](#joint-direction)). |
+| A joint moves the wrong way (opposite to the sim) | Compare the real arm with the rerun view (a joint's measured line moves opposite to its commanded line). Calibrated: redo [calibration](#calibration), with min and max at the ends the model shows. Uncalibrated: list it in `--robot.inverted_joints` (default `[J5]`), e.g. `'[J5,J3]'` ([6](#joint-direction)). |
+| Real arm stops short of, or overshoots, the sim's pose | Redo [calibration](#calibration) with each joint pushed fully to the ends the model shows. |
 | Arm wobbles after stopping | Measure and set `shaper_freq_hz` ([7](#7-tune-the-motion-input-shaping)), or lower `max_acceleration_deg_s2`. |
 | Arm feels sluggish | Raise `max_velocity_deg_s` / `max_acceleration_deg_s2`, or use `shaper_type=zv`. |
 | Servo buzzes while holding | Lower `--robot.p_coefficient` (try 12). |

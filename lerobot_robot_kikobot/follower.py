@@ -21,6 +21,7 @@ from lerobot.motors import MotorCalibration
 from lerobot.robots import Robot
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
+from .calibration import fit_range, is_range_calibrated
 from .config import ARM_JOINTS, KikobotFollowerConfig
 from .display import DISPLAY_MODES, SimDisplay
 from .feetech import (
@@ -102,25 +103,30 @@ class KikobotFollower(Robot):
             range_min=0, range_max=RESOLUTION - 1,
         )
 
-    def _sign(self, motor: str, c: MotorCalibration) -> int:
+    def _steps_per_rad(self, i: int, motor: str, c: MotorCalibration) -> float:
+        """Signed servo steps per joint radian."""
         sign = -1 if c.drive_mode else 1
-        return -sign if motor in self.config.inverted_joints else sign
+        if is_range_calibrated(c.range_min, c.range_max):
+            # The measured travel spans the model's range exactly; its direction
+            # was measured too, so `inverted_joints` does not apply.
+            return sign * (c.range_max - c.range_min) / (self.upper[i] - self.lower[i])
+        if motor in self.config.inverted_joints:
+            sign = -sign
+        return sign / RAD_PER_STEP
 
     def _to_raw(self, q: np.ndarray) -> dict[int, int]:
         out = {}
-        for motor, angle in zip(self.motor_ids, q):
+        for i, (motor, angle) in enumerate(zip(self.motor_ids, q)):
             c = self._calib(motor)
-            sign = self._sign(motor, c)
-            raw = c.homing_offset + sign * angle / RAD_PER_STEP
+            raw = c.homing_offset + angle * self._steps_per_rad(i, motor, c)
             out[self.motor_ids[motor]] = int(round(min(max(raw, c.range_min), c.range_max)))
         return out
 
     def _from_raw(self, raw: dict[int, int]) -> np.ndarray:
         q = []
-        for motor, servo_id in self.motor_ids.items():
+        for i, (motor, servo_id) in enumerate(self.motor_ids.items()):
             c = self._calib(motor)
-            sign = self._sign(motor, c)
-            q.append(sign * (raw[servo_id] - c.homing_offset) * RAD_PER_STEP)
+            q.append((raw[servo_id] - c.homing_offset) / self._steps_per_rad(i, motor, c))
         return np.array(q)
 
     @property
@@ -128,8 +134,23 @@ class KikobotFollower(Robot):
         # Uncalibrated still runs, on the mid-scale default above.
         return True
 
+    def _end_names(self, i: int, motor: str) -> tuple[str, str]:
+        if motor == "gripper":
+            closed_is_min = self.config.gripper_closed_deg < self.config.gripper_open_deg
+            return ("jaws closed", "jaws open") if closed_is_min else ("jaws open", "jaws closed")
+        return (f"min, {np.rad2deg(self.lower[i]):+.0f} deg", f"max, {np.rad2deg(self.upper[i]):+.0f} deg")
+
+    def _show_pose(self, display: SimDisplay | None, i: int, angle: float) -> None:
+        """Pose the model with joint i at `angle` and the others at zero."""
+        if display is None:
+            return
+        q = np.zeros(len(self.motor_ids))
+        q[i] = angle
+        pct = self._gripper_pct(angle) if i == len(ARM_JOINTS) else 100.0
+        display.update(q, pct, q)
+
     def calibrate(self) -> None:
-        """Record each servo's reading at the model's zero pose."""
+        """Map each joint's travel onto the model's range: min, middle, max by hand."""
         if self.calibration:
             answer = input(
                 f"Press ENTER to keep the calibration in {self.calibration_fpath}, "
@@ -137,34 +158,77 @@ class KikobotFollower(Robot):
             )
             if answer.strip().lower() != "c":
                 return
+        # lerobot-calibrate connects first; the stream must not share the bus.
+        streaming = self.streamer is not None
+        if streaming:
+            self.streamer.stop()
+            self.streamer = None
         own_bus = self.bus is None
         bus = self.bus or FeetechBus(self.config.port, self.config.baudrate, list(self.motor_ids.values()))
+        display = None
+        if self.config.display != "none":
+            # The model shows each pose to match; `mujoco` mode would need mjpython on macOS.
+            display = SimDisplay("rerun" if self.config.display == "both" else self.config.display)
+        fits = {}
         try:
             bus.set_torque(False)
+            # Readings are taken as actual positions; the servos keep their old
+            # offset until the end, so an aborted run leaves the old calibration valid.
+            old_offset = {servo_id: bus.homing_offset(servo_id) for servo_id in self.motor_ids.values()}
             print(
-                "\nTorque is off. Move the arm by hand to its zero pose: every joint at\n"
-                "mid-travel, as in the MuJoCo model with all joints at 0 (open\n"
-                "models/scene.xml in the MuJoCo viewer to see it). Jaws fully open.\n"
+                "\nTorque is off. For each joint, move it by hand to its min end, then\n"
+                "to any point in between, then to its max end, pressing ENTER at each.\n"
+                "Min and max are the model's joint limits"
+                + (", shown in the live view." if display else ".")
+                + " The middle point only tells which way\nthe joint turned. "
+                "Hold the arm: it is limp.\n"
             )
-            input("Press ENTER when the arm is in the zero pose...")
-            raw = bus.sync_read_positions()
+            for i, (motor, servo_id) in enumerate(self.motor_ids.items()):
+                lo_name, hi_name = self._end_names(i, motor)
+                while True:
+                    readings = []
+                    mid = (self.lower[i] + self.upper[i]) / 2
+                    for step, angle in ((lo_name, self.lower[i]), ("middle, anywhere", mid), (hi_name, self.upper[i])):
+                        self._show_pose(display, i, angle)
+                        input(f"  {motor}: move to {step}, then ENTER ")
+                        readings.append(bus.read_positions()[servo_id] + old_offset[servo_id])
+                    try:
+                        fit = fit_range(*readings, self.lower[i], self.upper[i])
+                    except ValueError as exc:
+                        print(f"  {motor}: {exc}. Again.")
+                        continue
+                    ratio = fit.span_steps * RAD_PER_STEP / (self.upper[i] - self.lower[i])
+                    print(f"  {motor}: {fit.span_steps} steps, {ratio:.2f}x the servo's nominal scale")
+                    if abs(ratio - 1.0) > 0.15:
+                        answer = input(
+                            f"  warning: {motor}'s travel differs from the model's by "
+                            f"{abs(ratio - 1) * 100:.0f}%. Type 'r' and ENTER to redo it, or ENTER to keep: "
+                        )
+                        if answer.strip().lower() == "r":
+                            continue
+                    fits[motor] = fit
+                    break
+            for motor, servo_id in self.motor_ids.items():
+                bus.set_homing_offset(servo_id, fits[motor].servo_offset)
         finally:
+            if display is not None:
+                display.close()
             if own_bus:
                 bus.close()
         self.calibration = {
             motor: MotorCalibration(
                 id=servo_id,
-                # Keep a direction flip set by hand in the file.
-                drive_mode=self.calibration[motor].drive_mode if motor in self.calibration else 0,
-                homing_offset=int(raw[servo_id]),
-                range_min=0,
-                range_max=RESOLUTION - 1,
+                drive_mode=fits[motor].drive_mode,
+                homing_offset=fits[motor].zero,
+                range_min=fits[motor].range_min,
+                range_max=fits[motor].range_max,
             )
             for motor, servo_id in self.motor_ids.items()
         }
         self._save_calibration()
         print(f"Calibration saved to {self.calibration_fpath}")
-        print("If a joint turns the wrong way, set its drive_mode to 1 in that file.")
+        if streaming:
+            self._start_stream()
 
     def configure(self) -> None:
         bus = self.bus
@@ -182,6 +246,24 @@ class KikobotFollower(Robot):
 
     # -------------------------------------------------------------- connection
 
+    def _start_stream(self) -> None:
+        cfg = self.config
+        # Goal = where the arm is before torque comes on, so nothing jumps.
+        present_raw = self.bus.sync_read_positions()
+        self.bus.sync_write_goals(present_raw)
+        self.bus.set_torque(True)
+        present = self._from_raw(present_raw)
+        self.streamer = ServoStreamer(
+            self.bus,
+            MotionShaper(len(self.motor_ids), cfg.motion),
+            self._to_raw,
+            self._from_raw,
+            cfg.stream_hz,
+            cfg.read_every,
+        )
+        self.streamer.start(present)
+        self._target = present.copy()
+
     @property
     def is_connected(self) -> bool:
         return self.streamer is not None and all(c.is_connected for c in self.cameras.values())
@@ -195,26 +277,12 @@ class KikobotFollower(Robot):
             if not self.calibration:
                 if calibrate:
                     logger.warning(
-                        "No calibration at %s; using mid-scale as each joint's zero. "
-                        "Run lerobot-calibrate --robot.type=kikobot_follower to set it.",
+                        "No calibration at %s; using mid-scale as each joint's zero. Run "
+                        "lerobot-calibrate --robot.type=kikobot_follower to match the arm to the sim.",
                         self.calibration_fpath,
                     )
             self.configure()
-            # Goal = where the arm is before torque comes on, so nothing jumps.
-            present_raw = self.bus.sync_read_positions()
-            self.bus.sync_write_goals(present_raw)
-            self.bus.set_torque(True)
-            present = self._from_raw(present_raw)
-            self.streamer = ServoStreamer(
-                self.bus,
-                MotionShaper(len(self.motor_ids), cfg.motion),
-                self._to_raw,
-                self._from_raw,
-                cfg.stream_hz,
-                cfg.read_every,
-            )
-            self.streamer.start(present)
-            self._target = present.copy()
+            self._start_stream()
         except Exception:
             self.bus.close()
             self.bus = None

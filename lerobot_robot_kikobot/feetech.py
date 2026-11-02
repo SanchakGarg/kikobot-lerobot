@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # EEPROM (persist; only written when the value differs).
 ADDR_RETURN_DELAY = 7
+ADDR_HOMING_OFFSET = 31
 ADDR_P_COEFFICIENT = 21
 ADDR_D_COEFFICIENT = 22
 ADDR_I_COEFFICIENT = 23
@@ -118,6 +119,19 @@ class FeetechBus:
             return
         self.write_byte(servo_id, ADDR_LOCK, 0)
         self.write_byte(servo_id, address, value)
+        self.write_byte(servo_id, ADDR_LOCK, 1)
+
+    def homing_offset(self, servo_id: int) -> int:
+        value, result, error = self._txrx(self.packet.read2ByteTxRx, servo_id, ADDR_HOMING_OFFSET)
+        self._check(result, error, f"read servo {servo_id} homing offset")
+        return _sign_magnitude(value, sign_bit=11)
+
+    def set_homing_offset(self, servo_id: int, offset: int) -> None:
+        """Shift the servo's zero: Present_Position = actual - offset (EEPROM)."""
+        # Sign-magnitude, sign in bit 11.
+        raw = abs(offset) | (1 << 11) if offset < 0 else offset
+        self.write_byte(servo_id, ADDR_LOCK, 0)
+        self.write_word(servo_id, ADDR_HOMING_OFFSET, raw)
         self.write_byte(servo_id, ADDR_LOCK, 1)
 
     def set_torque(self, enabled: bool) -> None:
