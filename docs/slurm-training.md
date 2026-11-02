@@ -20,15 +20,17 @@ newer.
 module avail python 2>&1 | grep -i 3.12        # e.g. module load python/3.12
 # or: curl -LsSf https://astral.sh/uv/install.sh | sh && uv python install 3.12
 
-git clone https://github.com/huggingface/lerobot.git ~/lerobot
-cd ~/lerobot
+W=~/kikobot                       # the parent folder on the cluster
+mkdir -p $W
+git clone https://github.com/huggingface/lerobot.git $W/lerobot
+cd $W/lerobot
 python3.12 -m venv .venv          # uv: uv venv --python 3.12 .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 .venv/bin/pip install -e ".[training]"
 
 # The training scripts and this repo's sbatch file.
-git clone https://github.com/SanchakGarg/kikobot-lerobot.git ~/kikobot-lerobot
+git clone https://github.com/SanchakGarg/kikobot-lerobot.git $W/kikobot-lerobot
 ```
 
 The plugin itself is not needed to train, so there is no `pip install` of
@@ -43,7 +45,7 @@ install it into the venv's prefix with conda
 
 ```bash
 srun --gres=gpu:1 --partition=gpu --time=00:10:00 --pty \
-  ~/lerobot/.venv/bin/python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(), torch.cuda.get_arch_list())"
+  ~/kikobot/lerobot/.venv/bin/python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(), torch.cuda.get_arch_list())"
 ```
 
 `sm_100` must be in the list. If it is not, reinstall torch from the
@@ -55,8 +57,9 @@ srun --gres=gpu:1 --partition=gpu --time=00:10:00 --pty \
 `scp` built in:
 
 ```powershell
-cd $HOME\kikobot-lerobot
-scp -r datasets\kikobot_isaac user@cluster:~/kikobot-lerobot/datasets/
+$W = "$HOME\kikobot"
+cd $W\kikobot-lerobot
+scp -r datasets\kikobot_isaac user@cluster:~/kikobot/kikobot-lerobot/datasets/
 ```
 
 For later updates, `rsync -av` from WSL or Git Bash only sends what changed.
@@ -65,13 +68,14 @@ For later updates, `rsync -av` from WSL or Git Bash only sends what changed.
 machines. The dataset stays private.
 
 ```powershell
-& "$HOME\lerobot\.venv\Scripts\hf.exe" auth login
-& "$HOME\lerobot\.venv\Scripts\hf.exe" upload YOUR_HF_USER/kikobot_isaac `
+$W = "$HOME\kikobot"
+& "$W\lerobot\.venv\Scripts\hf.exe" auth login
+& "$W\lerobot\.venv\Scripts\hf.exe" upload YOUR_HF_USER/kikobot_isaac `
   datasets\kikobot_isaac --repo-type dataset --private
 ```
 
 Then on the cluster, set `REPO_ID=YOUR_HF_USER/kikobot_isaac` (below) and
-log in once with `~/lerobot/.venv/bin/hf auth login`. The data downloads when
+log in once with `~/kikobot/lerobot/.venv/bin/hf auth login`. The data downloads when
 the job starts.
 
 ## 3. Submit the training job
@@ -81,7 +85,7 @@ lines for your cluster: the partition name, an account if your cluster
 needs one, and the time limit. Then:
 
 ```bash
-cd ~/kikobot-lerobot
+cd ~/kikobot/kikobot-lerobot
 sbatch scripts/slurm/train.sbatch
 ```
 
@@ -107,7 +111,7 @@ DATASET=kikobot_isaac_cylinder REPO_ID=you/kikobot_isaac_cylinder \
 | `OUTPUT_DIR` | `outputs/train/<policy>_<dataset>` | Where checkpoints go |
 | `WANDB` | false | Log to Weights & Biases (run `wandb login` once on the login node) |
 | `RESUME` | empty | An earlier `OUTPUT_DIR` to continue from |
-| `LEROBOT_DIR` | `~/lerobot` | LeRobot checkout with `.venv` |
+| `LEROBOT_DIR` | `lerobot` next to this repo (`~/kikobot/lerobot`) | LeRobot checkout with `.venv` |
 
 **Watch the job:**
 
@@ -133,9 +137,10 @@ Only the final `pretrained_model` folder is needed, about 200 MB for ACT. In
 PowerShell on the laptop:
 
 ```powershell
-cd $HOME\kikobot-lerobot
+$W = "$HOME\kikobot"
+cd $W\kikobot-lerobot
 mkdir outputs\train\act_kikobot_isaac -Force
-scp -r user@cluster:~/kikobot-lerobot/outputs/train/act_kikobot_isaac/checkpoints/last/pretrained_model `
+scp -r user@cluster:~/kikobot/kikobot-lerobot/outputs/train/act_kikobot_isaac/checkpoints/last/pretrained_model `
   outputs\train\act_kikobot_isaac\
 ```
 

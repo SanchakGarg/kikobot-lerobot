@@ -20,7 +20,8 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------- settings
-LEROBOT_DIR=${LEROBOT_DIR:-$HOME/lerobot}       # LeRobot checkout with its .venv
+# LeRobot sits next to this repo in the same parent folder (see docs/slurm-training.md).
+LEROBOT_DIR=${LEROBOT_DIR:-$(dirname "${SLURM_SUBMIT_DIR:-$PWD}")/lerobot}
 DATASET=${DATASET:-kikobot_isaac}               # folder under datasets/
 DATASET_ROOT=${DATASET_ROOT:-$PWD/datasets/$DATASET}
 REPO_ID=${REPO_ID:-local/$DATASET}               # or your-hf-user/kikobot_isaac to pull from the Hub

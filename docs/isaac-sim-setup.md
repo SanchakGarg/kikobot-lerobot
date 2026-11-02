@@ -10,6 +10,27 @@ You will end up with two Python environments on the GPU machine:
 Both use **Python 3.12**. Keep them separate: Isaac Sim pins its own
 versions of many packages.
 
+Everything goes in **one parent folder**, not straight into your home
+folder: LeRobot, this repo and Isaac Sim side by side.
+
+```
+kikobot\                     the parent folder ($W), e.g. C:\Users\you\kikobot
+├── lerobot\                 LeRobot, with its .venv (step 1)
+├── kikobot-lerobot\         this repo (step 1)
+└── isaacsim-env\            Isaac Sim 6 (step 2)
+```
+
+Every command in these docs starts from `$W`. Set it in each new terminal,
+pointing at your parent folder:
+
+```powershell
+$W = "$HOME\kikobot"          # Windows (PowerShell)
+```
+
+```bash
+W=~/kikobot                   # Ubuntu
+```
+
 ## Requirements
 
 - **GPU:** an NVIDIA RTX card (RTX 20xx or newer, or RTX Ada/Blackwell
@@ -27,30 +48,56 @@ versions of many packages.
 
 ## 1. LeRobot and this plugin
 
-If you followed the main README's quick start, this is done. Otherwise, on
-Windows (PowerShell):
+On Windows (PowerShell):
 
 ```powershell
-git clone https://github.com/huggingface/lerobot.git $HOME\lerobot
-cd $HOME\lerobot
+mkdir $W -Force
+git clone https://github.com/huggingface/lerobot.git $W\lerobot
+cd $W\lerobot
 py -3.12 -m venv .venv
 .venv\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 .venv\Scripts\pip install -e ".[core_scripts,training,feetech]"
 
-git clone https://github.com/SanchakGarg/kikobot-lerobot.git $HOME\kikobot-lerobot
-cd $HOME\kikobot-lerobot
-& "$HOME\lerobot\.venv\Scripts\pip.exe" install -e .
+git clone https://github.com/SanchakGarg/kikobot-lerobot.git $W\kikobot-lerobot
+cd $W\kikobot-lerobot
+& "$W\lerobot\.venv\Scripts\pip.exe" install -e .
 ```
 
-Already installed? Update and reinstall the plugin so it picks up `pyzmq`:
+Already installed somewhere else, e.g. in your home folder from the main
+README's quick start? Move both folders into `$W` and recreate LeRobot's
+venv, because a venv breaks when it is moved:
 
 ```powershell
-cd $HOME\kikobot-lerobot
-git pull
-& "$HOME\lerobot\.venv\Scripts\pip.exe" install -e .
+mkdir $W -Force
+Move-Item $HOME\lerobot, $HOME\kikobot-lerobot $W
+cd $W\lerobot
+Remove-Item -Recurse -Force .venv
+py -3.12 -m venv .venv
+.venv\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+.venv\Scripts\pip install -e ".[core_scripts,training,feetech]"
+& "$W\lerobot\.venv\Scripts\pip.exe" install -e $W\kikobot-lerobot
 ```
 
-On Ubuntu, the same with `python3.12 -m venv`, `.venv/bin/pip` and `~/` paths.
+Already in `$W`? Update and reinstall the plugin so it picks up `pyzmq`:
+
+```powershell
+cd $W\kikobot-lerobot
+git pull
+& "$W\lerobot\.venv\Scripts\pip.exe" install -e .
+```
+
+**Ubuntu:**
+
+```bash
+mkdir -p $W
+git clone https://github.com/huggingface/lerobot.git $W/lerobot
+cd $W/lerobot
+python3.12 -m venv .venv
+.venv/bin/pip install -e ".[core_scripts,training,feetech]"
+
+git clone https://github.com/SanchakGarg/kikobot-lerobot.git $W/kikobot-lerobot
+$W/lerobot/.venv/bin/pip install -e $W/kikobot-lerobot
+```
 
 ## 2. Isaac Sim 6 (with Newton)
 
@@ -64,8 +111,8 @@ at startup, so there is no separate install.
 New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
   -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
 
-py -3.12 -m venv $HOME\isaacsim-env
-$I = "$HOME\isaacsim-env\Scripts"
+py -3.12 -m venv $W\isaacsim-env
+$I = "$W\isaacsim-env\Scripts"
 & "$I\python.exe" -m pip install --upgrade pip
 & "$I\pip.exe" install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 & "$I\pip.exe" install "isaacsim[all,extscache]==6.0.0.1" --extra-index-url https://pypi.nvidia.com
@@ -75,8 +122,8 @@ $I = "$HOME\isaacsim-env\Scripts"
 **Ubuntu:**
 
 ```bash
-python3.12 -m venv ~/isaacsim-env
-I=~/isaacsim-env/bin
+python3.12 -m venv $W/isaacsim-env
+I=$W/isaacsim-env/bin
 $I/pip install --upgrade pip
 $I/pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 $I/pip install "isaacsim[all,extscache]==6.0.0.1" --extra-index-url https://pypi.nvidia.com
@@ -106,7 +153,8 @@ shader cache; later starts take well under a minute.
 
 **Laptops with two GPUs:** make Windows run Isaac Sim on the RTX card.
 Settings → System → Display → Graphics → add
-`%USERPROFILE%\isaacsim-env\Scripts\python.exe` → Options → High performance.
+`$W\isaacsim-env\Scripts\python.exe` (print the full path with
+`echo "$I\python.exe"`) → Options → High performance.
 
 ## 3. Convert the arm to USD
 
@@ -114,7 +162,7 @@ Isaac Sim loads USD, not MJCF. Convert `models/robot.xml` once, and again
 whenever it changes:
 
 ```powershell
-cd $HOME\kikobot-lerobot
+cd $W\kikobot-lerobot
 & "$I\python.exe" isaac\convert_mjcf.py
 ```
 
@@ -131,7 +179,7 @@ with `--kp`, `--kd`, `--max-torque` and the `--finger-*` options.
 Terminal 1, the sim:
 
 ```powershell
-cd $HOME\kikobot-lerobot
+cd $W\kikobot-lerobot
 & "$I\python.exe" isaac\kikobot_isaac_server.py
 ```
 
@@ -141,7 +189,7 @@ stays empty until a client connects.
 Terminal 2, LeRobot, with the gamepad plugged in:
 
 ```powershell
-& "$HOME\lerobot\.venv\Scripts\lerobot-teleoperate.exe" `
+& "$W\lerobot\.venv\Scripts\lerobot-teleoperate.exe" `
   --robot.type=kikobot_isaac --teleop.type=kikobot_gamepad
 ```
 
@@ -166,7 +214,9 @@ example a Mac (where Isaac Sim cannot run) driving a Linux RTX workstation.
 On the Isaac machine:
 
 ```bash
-~/isaacsim-env/bin/python isaac/kikobot_isaac_server.py --headless --livestream
+W=~/kikobot
+cd $W/kikobot-lerobot
+$W/isaacsim-env/bin/python isaac/kikobot_isaac_server.py --headless --livestream
 ```
 
 On the LeRobot machine, forward the port over SSH and connect through it:

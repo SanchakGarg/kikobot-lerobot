@@ -1,21 +1,27 @@
 # Teleop in Isaac Sim
 
-Do [setup](isaac-sim-setup.md) first. Shorthands used below:
+Do [setup](isaac-sim-setup.md) first. Everything lives in one parent folder,
+`$W`, as set up there. Set these in each new terminal:
 
-| | Windows (PowerShell) | Ubuntu |
-|---|---|---|
-| Isaac Sim Python | `$I = "$HOME\isaacsim-env\Scripts"` → `& "$I\python.exe"` | `~/isaacsim-env/bin/python` |
-| LeRobot tools | `$V = "$HOME\lerobot\.venv\Scripts"` → `& "$V\lerobot-teleoperate.exe"` | `~/lerobot/.venv/bin/lerobot-teleoperate` |
+```powershell
+$W = "$HOME\kikobot"                    # your parent folder
+$I = "$W\isaacsim-env\Scripts"          # Isaac Sim's Python
+$V = "$W\lerobot\.venv\Scripts"         # LeRobot's tools
+```
+
+```bash
+W=~/kikobot; I=$W/isaacsim-env/bin; V=$W/lerobot/.venv/bin   # Ubuntu
+```
 
 Commands are shown for Windows. On Ubuntu, change `` ` `` line endings to
-`\` and use the paths above.
+`\`, and `"$I\python.exe"` / `"$V\lerobot-*.exe"` to `$I/python` / `$V/lerobot-*`.
 
 ## 1. Start the sim server
 
 Run from the repo:
 
 ```powershell
-cd $HOME\kikobot-lerobot
+cd $W\kikobot-lerobot
 & "$I\python.exe" isaac\kikobot_isaac_server.py
 ```
 
