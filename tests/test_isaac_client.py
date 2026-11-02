@@ -48,6 +48,8 @@ class FakeBackend(srv.Backend):
         self.t = 0.0
         self.targets = (np.zeros(6), 0.0)
         self.respawns = []
+        self.desks = []
+        self.steps = 0
         self.configured = []
 
     def configure(self, fps, width, height, cameras, scene):
@@ -62,10 +64,16 @@ class FakeBackend(srv.Backend):
     def respawn(self, obj_xy, pad_xy, yaw):
         self.respawns.append((obj_xy, pad_xy, yaw))
 
+    desk_pool = srv.desk_layout.default_pool()
+
+    def randomize_desk(self, placements):
+        self.desks.append(placements)
+
     def set_targets(self, q, finger):
         self.targets = (q.copy(), finger)
 
     def physics_step(self):
+        self.steps += 1
         q, f = self.targets
         self.q += 0.5 * (q - self.q)
         self.finger += 0.5 * (f - self.finger)
@@ -191,6 +199,24 @@ def test_same_seed_same_spawns(server):
     assert np.allclose(o1, o2) and np.allclose(p1, p2) and y1 == y2
     assert np.linalg.norm(o1 - p1) >= srv.MIN_OBJECT_PAD_GAP_M
     assert backend.configured == ["pick_place"]  # same geometry: not rebuilt
+
+
+def test_desk_sort_scene(server):
+    backend, port = server
+    for _ in range(2):
+        robot = _robot(port, scene="desk_sort", camera_names=("record", "overhead"))
+        robot.connect()
+        obs = robot.get_observation()
+        assert obs["overhead"].shape == (48, 64, 3)
+        robot.disconnect()
+    assert backend.respawns == []
+    a, b = backend.desks
+    assert [p.pos for p in a] == [p.pos for p in b]  # same seed, same desk
+    assert len(a) == len(backend.desk_pool)
+    assert sum(p.active for p in a) >= 4  # at least 3 writing tools + 1 supply
+    assert backend.configured == ["desk_sort"]
+    # The settle phase ran physics before each episode started.
+    assert backend.steps >= 2 * round(srv.SETTLE_S * 30 * srv.SUBSTEPS)
 
 
 def test_server_errors_reach_the_client(server):

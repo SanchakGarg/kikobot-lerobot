@@ -35,7 +35,8 @@ from typing import Any
 
 import numpy as np
 
-REPO = Path(__file__).resolve().parent.parent
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
 PKG = REPO / "lerobot_robot_kikobot"
 MODELS = Path(os.environ.get("KIKOBOT_MODELS_DIR", REPO / "models"))
 DEFAULT_USD = MODELS / "usd" / "kikobot.usd"
@@ -48,8 +49,18 @@ SUBSTEPS = 17
 SPAWN_RADIUS_M = (0.22, 0.32)
 SPAWN_HALF_ANGLE_RAD = math.radians(40.0)
 MIN_OBJECT_PAD_GAP_M = 0.12
-SCENES = ("empty", "pick_place", "cylinder")
-CAMERAS = ("record",)
+SCENES = ("empty", "pick_place", "cylinder", "desk_sort")
+CAMERAS = ("record", "overhead")
+# name: (eye, target, up, vertical fov deg).
+# record: in front of the table on +X, aimed at the base, as in pick_place_scene.xml.
+# overhead: straight down on the desk, top of the image towards +X.
+CAMERA_POSES = {
+    "record": ((0.78, 0.0, 0.34), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 48.0),
+    "overhead": ((0.18, 0.0, 0.80), (0.18, 0.0, 0.0), (1.0, 0.0, 0.0), 50.0),
+}
+# desk_sort: physics run with the arm held at ready after each respawn, so
+# stacked pens drop and come to rest before the episode starts.
+SETTLE_S = 0.6
 
 log = logging.getLogger("kikobot_isaac")
 
@@ -67,6 +78,10 @@ def _load(name: str, path: Path):
 _load("motion_config", PKG / "motion_config.py")
 motion = _load("kikobot_motion", PKG / "motion.py")
 proto = _load("kikobot_isaac_protocol", PKG / "isaac_protocol.py")
+# The desk sorting station (no Isaac Sim imports at module level either).
+desk_layout = _load("desk_layout", HERE / "desk_layout.py")
+_load("desk_textures", HERE / "desk_textures.py")
+desk_assets = _load("desk_assets", HERE / "desk_assets.py")
 
 
 # ------------------------------------------------------------------ the model
@@ -134,6 +149,9 @@ class Backend:
     def configure(self, fps: int, width: int, height: int, cameras: list[str], scene: str) -> None: ...
     def reset_arm(self, q: np.ndarray, gripper_open: float) -> None: ...
     def respawn(self, obj_xy: np.ndarray, pad_xy: np.ndarray, yaw: float) -> None: ...
+    # desk_sort: the items that exist (with real sizes), and one episode's layout.
+    desk_pool: list = []
+    def randomize_desk(self, placements: list) -> None: ...
     def set_targets(self, q: np.ndarray, finger: float) -> None: ...
     def physics_step(self) -> None: ...
     def render(self) -> None: ...
@@ -146,8 +164,10 @@ class Backend:
 class KikobotServer:
     """The protocol on top of a Backend: shaping, units, episode resets."""
 
-    def __init__(self, backend: Backend, limits: dict[str, tuple[float, float]]):
+    def __init__(self, backend: Backend, limits: dict[str, tuple[float, float]], settle_s: float = SETTLE_S):
         self.b = backend
+        self.settle_s = settle_s
+        self.placements: list = []
         self.limits = limits
         self.lower = np.array([limits[j][0] for j in ARM_JOINTS])
         self.upper = np.array([limits[j][1] for j in ARM_JOINTS])
@@ -208,11 +228,26 @@ class KikobotServer:
         self.target = ready.copy()
         self.gripper_pct = 100.0
         self.b.reset_arm(ready, self._finger(100.0))
-        if self.cfg["scene"] != "empty":
+        scene = self.cfg["scene"]
+        if scene == "desk_sort":
+            self.placements = desk_layout.sample_desk(self.rng, self.b.desk_pool)
+            self.b.randomize_desk(self.placements)
+            self._settle(ready)
+        elif scene != "empty":
             self.b.respawn(*spawn_positions(self.rng))
         self.shaper.reset(ready, self.b.sim_time())
         self.b.render()
         return proto.pack({"state": self.state()})
+
+    def _settle(self, ready: np.ndarray) -> None:
+        """Let dropped items come to rest with the arm held at ready, then put
+        the arm back exactly at ready."""
+        n = int(round(self.settle_s * self.cfg["fps"] * SUBSTEPS))
+        finger = self._finger(100.0)
+        for _ in range(n):
+            self.b.set_targets(ready, finger)
+            self.b.physics_step()
+        self.b.reset_arm(ready, finger)
 
     def step(self, req: dict[str, Any]) -> list[bytes]:
         self._need_hello()
@@ -372,6 +407,9 @@ class IsaacNewtonBackend(Backend):
         self.objects = {
             name: RigidPrim(path) for name, path in self.object_paths.items()
         }
+        self.desk_view = None
+        if scene == "desk_sort":
+            self.desk_view = RigidPrim([self.desk.paths[it.name] for it in self.desk_pool])
         timeline.pause()  # step() advances physics explicitly from here on.
         self._t = 0.0
         log.info("Scene %r ready: dofs %s, physics dt %.5f s.", scene, names, self.dt)
@@ -420,6 +458,7 @@ class IsaacNewtonBackend(Backend):
         floor = material("/World/Looks/Floor", (0.15, 0.22, 0.3), friction=1.0)
         box("/World/Floor", (0, 0, floor_z - 0.05), (5, 5, 0.05), floor)
         self.object_paths: dict[str, str] = {}
+        self.desk_pool = []
         if scene == "empty":
             return
 
@@ -433,6 +472,10 @@ class IsaacNewtonBackend(Backend):
             leg.CreateHeightAttr(0.38)
             UsdGeom.Xformable(leg).AddTranslateOp().Set(Gf.Vec3d(x, y, -0.21))
             bind(leg.GetPrim(), frame)
+
+        if scene == "desk_sort":
+            self._build_desk(stage)
+            return
 
         # Object to pick: free rigid body. Pose is set per episode by respawn().
         if scene == "pick_place":
@@ -468,6 +511,25 @@ class IsaacNewtonBackend(Backend):
         UsdPhysics.MassAPI.Apply(pad.GetPrim()).CreateMassAttr(1.0)
         bind(pad.GetPrim(), green)
         self.object_paths["pad"] = "/World/Pad"
+
+    def _build_desk(self, stage) -> None:
+        mode = self.args.desk_assets
+        catalog = {} if mode == "procedural" else desk_assets.load_catalog(Path(self.args.desk_assets_json))
+        if mode == "nucleus" and not catalog:
+            raise FileNotFoundError(
+                f"--desk-assets nucleus needs {self.args.desk_assets_json}. "
+                "Make it with: python isaac/desk_assets.py --discover"
+            )
+        self.desk = desk_assets.build_desk(
+            stage, desk_layout.default_pool(), desk_assets.DEFAULT_TEXTURES, catalog,
+            recolor_assets=not self.args.keep_asset_materials,
+        )
+        self.desk_pool = self.desk.pool
+        n_assets = sum(1 for s in self.desk.sources.values() if s != "procedural")
+        log.info("Desk: %d items (%d from assets, %d procedural).", len(self.desk_pool), n_assets,
+                 len(self.desk_pool) - n_assets)
+        for name, src in self.desk.sources.items():
+            log.debug("  %s: %s", name, src)
 
     def _add_arm(self, stage) -> None:
         from pxr import UsdPhysics
@@ -527,18 +589,16 @@ class IsaacNewtonBackend(Backend):
             ann.detach()
         self._annotators = {}
         for name in cameras:
-            # "record": in front of the table on +X, aimed at the base, 48 deg
-            # vertical field of view, as in pick_place_scene.xml.
+            eye, target, up, vfov = CAMERA_POSES[name]
             path = f"/World/Cameras/{name}"
             cam = UsdGeom.Camera.Define(stage, path)
             focal = 18.0
-            v_ap = 2 * focal * math.tan(math.radians(48.0) / 2)
+            v_ap = 2 * focal * math.tan(math.radians(vfov) / 2)
             cam.CreateFocalLengthAttr(focal)
             cam.CreateVerticalApertureAttr(v_ap)
             cam.CreateHorizontalApertureAttr(v_ap * width / height)
             cam.CreateClippingRangeAttr(Gf.Vec2f(0.01, 50.0))
-            eye, target = Gf.Vec3d(0.78, 0.0, 0.34), Gf.Vec3d(0.0, 0.0, 0.0)
-            view = Gf.Matrix4d().SetLookAt(eye, target, Gf.Vec3d(0, 0, 1))
+            view = Gf.Matrix4d().SetLookAt(Gf.Vec3d(*eye), Gf.Vec3d(*target), Gf.Vec3d(*up))
             UsdGeom.Xformable(cam).AddTransformOp().Set(view.GetInverse())
             rp = rep.create.render_product(path, (width, height))
             ann = rep.AnnotatorRegistry.get_annotator("rgb")
@@ -565,6 +625,15 @@ class IsaacNewtonBackend(Backend):
             self.objects["object"].set_velocities(linear_velocities=[[0, 0, 0]], angular_velocities=[[0, 0, 0]])
         if "pad" in self.objects:
             self.objects["pad"].set_world_poses(positions=[[pad_xy[0], pad_xy[1], 0.008]], orientations=[[1, 0, 0, 0]])
+
+    def randomize_desk(self, placements: list) -> None:
+        n = len(placements)
+        pos = np.array([p.pos for p in placements], dtype=np.float32)
+        quat = np.array([yaw_quat(p.yaw) for p in placements], dtype=np.float32)
+        self.desk_view.set_world_poses(positions=pos, orientations=quat)
+        zeros = np.zeros((n, 3), dtype=np.float32)
+        self.desk_view.set_velocities(linear_velocities=zeros, angular_velocities=zeros)
+        desk_assets.apply_looks(self.desk, placements)
 
     def set_targets(self, q: np.ndarray, finger: float) -> None:
         idx = [*self.arm_idx, *self.finger_idx]
@@ -626,6 +695,16 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="Variant of the imported USD's 'Physics' set to use if present "
                         "(falls back to newton, mujoco, physics, physx).")
     p.add_argument("--integrator", default="implicitfast", help="MuJoCo-Warp integrator.")
+    # desk_sort scene.
+    p.add_argument("--desk-assets", choices=("auto", "nucleus", "procedural"), default="auto",
+                   help="desk_sort items: auto uses --desk-assets-json where it has a match and "
+                        "builds the rest; nucleus requires the JSON; procedural ignores it.")
+    p.add_argument("--desk-assets-json", default=str(desk_assets.DEFAULT_ASSETS_JSON),
+                   help="From `python isaac/desk_assets.py --discover`.")
+    p.add_argument("--keep-asset-materials", action="store_true",
+                   help="Keep Nucleus assets' own look instead of the random colours and textures.")
+    p.add_argument("--settle-s", type=float, default=SETTLE_S,
+                   help="desk_sort: seconds of physics after each respawn for items to come to rest.")
     # Servo model: models/robot.xml's position actuators.
     p.add_argument("--kp", type=float, default=200.0, help="Arm joint stiffness, N*m/rad.")
     p.add_argument("--kd", type=float, default=3.0, help="Arm joint damping, N*m*s/rad.")
@@ -647,7 +726,7 @@ def main(argv=None) -> None:
         IsaacNewtonBackend._enable("omni.kit.livestream.webrtc")
     try:
         backend = IsaacNewtonBackend(app, args)
-        server = KikobotServer(backend, mjcf_limits())
+        server = KikobotServer(backend, mjcf_limits(), settle_s=args.settle_s)
         serve(server, args.bind, keep_running=app.is_running, idle=app.update)
     except KeyboardInterrupt:
         pass

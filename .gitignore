@@ -19,3 +19,5 @@ MUJOCO_LOG.TXT
 datasets/
 outputs/
 models/usd/
+models/textures/
+models/desk_assets.json

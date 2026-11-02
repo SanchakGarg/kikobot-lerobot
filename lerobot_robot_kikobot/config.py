@@ -55,11 +55,13 @@ class KikobotIsaacConfig(RobotConfig):
     # can be slow while Isaac Sim compiles shaders; `connect` waits longer.
     timeout_s: float = 10.0
     connect_timeout_s: float = 120.0
-    # empty | pick_place | cylinder. The server builds the matching scene.
+    # empty | pick_place | cylinder | desk_sort. The server builds the matching scene.
+    # desk_sort: pen cup, tray and random pens, glue, tape, scissors... (docs/isaac-sim-teleop.md).
     scene: str = "pick_place"
     fps: int = 30
     width: int = 640
     height: int = 480
+    # record (front) and/or overhead (top-down on the desk).
     camera_names: tuple[str, ...] = ("record",)
     seed: int | None = None
     # raw: exact pixels (use on one machine). jpeg: ~20x smaller (use over a network).
