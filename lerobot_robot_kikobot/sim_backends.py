@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 ENGINES = ("auto", "mujoco", "newton")
 RENDERERS = ("auto", "opengl", "mjwarp")
+RIGID_GAP_M = 0.002  # Newton contact detection reach past a geom's margin (Newton's default is 0.1).
 
 
 def cuda_available() -> bool:
@@ -93,12 +94,25 @@ class NewtonEngine:
         wp.config.quiet = True
         self.device = device or ("cuda:0" if cuda_available() else "cpu")
         builder = newton.ModelBuilder()
+        # The MJCF sets no contact gap, so Newton would give every geom its default
+        # 10 cm (MuJoCo >= 3.9: contacts detected out to margin + gap). On the desk
+        # that is thousands of far-off contact candidates a step, which fill
+        # MuJoCo's contact buffer and push out the real ones, the jaws' among them.
+        if hasattr(builder, "rigid_gap"):
+            builder.rigid_gap = RIGID_GAP_M
         # ctrl_direct: the MJCF's actuators take `control.mujoco.ctrl`, in MJCF
         # order, the same vector as MuJoCo's data.ctrl.
         builder.add_mjcf(mjcf, ctrl_direct=True)
         self.nm = builder.finalize(device=self.device)
         self.cpu = not self.device.startswith("cuda")
-        self.solver = newton.solvers.SolverMuJoCo(self.nm, use_mujoco_cpu=self.cpu)
+        # The scene's own MuJoCo settings, which Newton would otherwise replace:
+        # Euler, not Newton's implicitfast, under which the jaws creep shut on a
+        # held pen until it pops out; and multi-point CCD, without which a mesh
+        # jaw grips with one contact point, not MuJoCo's several.
+        self.solver = newton.solvers.SolverMuJoCo(
+            self.nm, use_mujoco_cpu=self.cpu, integrator="euler", enable_multiccd=True,
+        )
+        self._fix_solver_model()
         self.dt = float(model.opt.timestep)
         self.s0, self.s1 = self.nm.state(), self.nm.state()
         self.control = self.nm.control()
@@ -113,6 +127,36 @@ class NewtonEngine:
             self._capture()
         logger.info("Newton engine on %s (%s).", self.device, "MuJoCo C" if self.cpu else "MuJoCo Warp")
 
+    def _fix_solver_model(self) -> None:
+        """Two fixes to the MuJoCo model Newton builds for its solver.
+
+        Midphase off (below). And the contact damping ratio back: the scene mixes
+        solref formats (the jaws have "0.004 1"), and Newton keeps the time
+        constant but reads the ratio as 0, so the jaws would chatter, undamped, on
+        what they hold. A positive time constant with a zero ratio is never meant:
+        it becomes critically damped (1), as in the MJCF.
+        """
+        sm = getattr(self.solver, "mj_model", None)
+        if sm is None:
+            return
+        # Newton moves geoms onto its re-based body frames after MuJoCo compiled
+        # the model, so the per-body midphase BVHs keep the old bounds and miss
+        # real contacts (the jaws closing straight through what they grip). The
+        # midphase only saves time on bodies with many geoms: do without it.
+        sm.opt.disableflags |= int(mujoco.mjtDisableBit.mjDSBL_MIDPHASE)
+        ref = sm.geom_solref
+        bad = (ref[:, 0] > 0) & (ref[:, 1] == 0)
+        if not bad.any():
+            return
+        ref[bad, 1] = 1.0
+        dev = getattr(self.solver, "mjw_model", None)
+        if dev is not None and hasattr(dev.geom_solref, "numpy"):
+            arr = dev.geom_solref.numpy()
+            view = arr.reshape(-1, sm.ngeom, 2)
+            view[:, bad, 1] = 1.0
+            dev.geom_solref.assign(arr)
+        logger.info("Newton: restored the contact damping ratio of %d geoms.", int(bad.sum()))
+
     def _map_joints(self, model: mujoco.MjModel) -> None:
         labels = [str(l).split("/")[-1] for l in self.nm.joint_label]
         types = self.nm.joint_type.numpy()
@@ -121,8 +165,10 @@ class NewtonEngine:
         self.slices = []  # (mujoco qpos adr, newton q start, size, is free)
         for j in range(model.njnt):
             name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, j)
-            jt = model.jnt_type[j]
-            size = {mujoco.mjtJoint.mjJNT_FREE: 7, mujoco.mjtJoint.mjJNT_BALL: 4}.get(jt, 1)
+            # Plain ints: a numpy int never equals the pybind enum as a dict key, which
+            # made every free joint size 1 (only its x synced to and from Newton).
+            jt = int(model.jnt_type[j])
+            size = {int(mujoco.mjtJoint.mjJNT_FREE): 7, int(mujoco.mjtJoint.mjJNT_BALL): 4}.get(jt, 1)
             matches = [k for k, l in enumerate(labels) if l == name or l.endswith(f"_{name}")]
             if not matches:
                 raise RuntimeError(f"Joint {name!r} is not in the Newton model ({labels[:10]}...).")

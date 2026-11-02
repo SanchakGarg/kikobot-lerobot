@@ -86,3 +86,33 @@ def test_mjwarp_renders_where_things_are():
     b = w.render(["record"], 80, 60)["record"]
     assert a.shape == (60, 80, 3) and a.std() > 5
     assert np.abs(a.astype(int) - b).mean() > 2
+
+
+def test_newton_has_the_whole_pose_of_every_free_body():
+    """Each desk item's full pose (position and turn) in Newton's solver, not just its x."""
+    pytest.importorskip("newton")
+    import mujoco
+
+    w = SimWorld("desk_sort", seed=2, engine="newton")
+    sm, sd = w._engine.solver.mj_model, w._engine.solver.mj_data
+    names = [mujoco.mj_id2name(sm, mujoco.mjtObj.mjOBJ_JOINT, j) or "" for j in range(sm.njnt)]
+    for it, a in zip(w._desk.pool, w._desk.qpos_adr):
+        j = next(k for k, n in enumerate(names) if n.endswith(f"desk_{it.name}_free"))
+        theirs = sd.qpos[sm.jnt_qposadr[j] : sm.jnt_qposadr[j] + 7]
+        ours = w.data.qpos[a : a + 7]
+        assert np.allclose(theirs[:3], ours[:3], atol=1e-4), it.name
+        assert abs(abs(np.dot(theirs[3:], ours[3:])) - 1.0) < 1e-4, it.name
+
+
+def test_newton_solver_keeps_the_scenes_contact_settings():
+    """Small contact gap, Euler, multi-point CCD, no stale midphase, damped jaw contacts."""
+    pytest.importorskip("newton")
+    import mujoco
+
+    w = SimWorld("desk_sort", seed=0, engine="newton")
+    sm = w._engine.solver.mj_model
+    assert sm.opt.integrator == mujoco.mjtIntegrator.mjINT_EULER
+    assert not sm.opt.disableflags & int(mujoco.mjtDisableBit.mjDSBL_MULTICCD)
+    assert sm.opt.disableflags & int(mujoco.mjtDisableBit.mjDSBL_MIDPHASE)
+    assert sm.geom_gap.max() < 0.01
+    assert not np.any((sm.geom_solref[:, 0] > 0) & (sm.geom_solref[:, 1] == 0))
