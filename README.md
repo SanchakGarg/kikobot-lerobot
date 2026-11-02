@@ -1,16 +1,19 @@
 # kikobot-lerobot
 
 Kiko-Bot, a 6-DOF arm, as a [LeRobot](https://github.com/huggingface/lerobot)
-plugin. The same commands and the same gamepad drive the MuJoCo simulation
-and the real arm:
+plugin. The same commands and the same gamepad drive the MuJoCo simulation,
+NVIDIA Isaac Sim (Newton physics) and the real arm:
 
 | LeRobot type | What it is |
 |---|---|
 | `--robot.type=kikobot_sim` | The arm in MuJoCo (empty, pick-and-place or cylinder scene) |
+| `--robot.type=kikobot_isaac` | The arm in NVIDIA Isaac Sim with Newton physics and RTX cameras ([docs/](docs/README.md)) |
 | `--robot.type=kikobot_follower` | The physical arm on Feetech STS servos, streamed like an SO-101 |
 | `--teleop.type=kikobot_gamepad` | 6-DOF gamepad control: full IK over all six joints |
 
-The sim and the real arm share one action space (`J1.pos`..`J6.pos` in
+**Isaac Sim, and training on a SLURM cluster:** see [docs/](docs/README.md).
+
+The sims and the real arm share one action space (`J1.pos`..`J6.pos` in
 degrees, `gripper.pos` in % open), so a dataset recorded on one, or a policy
 trained on it, runs on the other.
 
@@ -173,11 +176,15 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 | `lerobot_robot_kikobot/motion.py` | Trajectory follower + input shaper (the anti-jitter stage). |
 | `lerobot_robot_kikobot/streamer.py` | Background thread streaming goals to the servos at 100 Hz. |
 | `lerobot_robot_kikobot/feetech.py` | Sync read/write over the Feetech bus. |
-| `lerobot_robot_kikobot/sim.py`, `follower.py`, `gamepad.py` | The three LeRobot devices. |
+| `lerobot_robot_kikobot/sim.py`, `isaac.py`, `follower.py`, `gamepad.py` | The four LeRobot devices. |
+| `lerobot_robot_kikobot/isaac_protocol.py` | The ZMQ messages between `kikobot_isaac` and the Isaac Sim server. |
+| `isaac/` | Run with Isaac Sim's Python: the sim server (Newton) and the MJCF → USD converter. |
+| `scripts/slurm/train.sbatch` | Train a policy on a SLURM GPU node. |
+| `docs/` | Isaac Sim setup, teleop, record/train/evaluate and SLURM guides. |
 | `lerobot_robot_kikobot/calibration.py` | Fits each joint's min/middle/max readings onto the model's range. |
 | `scripts/measure_resonance.py` | Measures a joint's ringing frequency to tune the shaper. |
 | `udev/99-kikobot.rules` | Ubuntu: serial port permissions and a stable `/dev/kikobot` name. |
-| `tests/` | Motion-shaper, droop-correction and calibration tests (no hardware needed). |
+| `tests/` | Motion-shaper, droop-correction, calibration and Isaac client tests (no hardware or Isaac Sim needed). |
 
 ---
 
@@ -304,6 +311,7 @@ Xbox layout. On PlayStation: cross = A, circle = B, square = X, triangle = Y.
 | B (hold) | Open the jaws |
 | X | Precision mode on/off (30 % speed) |
 | Y | Back to the home pose ([set in calibration](#home-pose); the ready pose if none) |
+| Back / View / Share | Sims only: reset the scene (arm home, object and pad respawned) |
 
 Moves are in the base frame, rotations about the gripper's own axes, and
 every axis is independent: moving in X does not tilt the jaws. At the edge
@@ -640,9 +648,12 @@ $V/lerobot-record --robot.type=kikobot_follower --robot.port=/dev/ttyACM0 --robo
   --dataset.num_episodes=20 --dataset.push_to_hub=false
 ```
 
-The same works with `--robot.type=kikobot_sim`. LeRobot has no hook to reset
-a sim scene between episodes, though, so for many sim episodes call
-`robot.reset_scene()` from your own loop.
+The same works with `--robot.type=kikobot_sim` and `kikobot_isaac`. LeRobot
+has no hook to reset a sim scene between episodes, so press **Back / View**
+on the gamepad during the reset period: the arm goes home and the object
+and pad respawn. Training and running a policy are in
+[docs/isaac-sim-record-and-train.md](docs/isaac-sim-record-and-train.md);
+the commands are the same for `kikobot_sim`.
 
 ---
 
