@@ -126,3 +126,28 @@ class ArmKinematics:
             pos[2] = READY_TCP_HEIGHT_M
             self._ready_q = self.solve(q0, pos, rot, iterations=300)
         return self._ready_q.copy()
+
+
+class GravityModel:
+    """Torque gravity puts on each arm joint (N·m) at a pose, from the model's masses.
+
+    Its own copy of the model, so the servo stream thread can call it while
+    the IK runs elsewhere. Positive means the joint must push positive to
+    hold still; left alone it would sag the negative way.
+    """
+
+    def __init__(self, scene_path: str = ARM_SCENE_PATH):
+        self.model = mujoco.MjModel.from_xml_path(scene_path)
+        self.data = mujoco.MjData(self.model)
+        ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, j) for j in ARM_JOINTS]
+        self.qpos_adr = self.model.jnt_qposadr[ids]
+        self.dof_adr = self.model.jnt_dofadr[ids]
+
+    def __call__(self, q: np.ndarray) -> np.ndarray:
+        """`q` holds J1..J6 first; anything after (the gripper) gets no torque."""
+        self.data.qpos[self.qpos_adr] = q[: len(ARM_JOINTS)]
+        self.data.qvel[:] = 0.0
+        mujoco.mj_forward(self.model, self.data)
+        tau = np.zeros(len(q))
+        tau[: len(ARM_JOINTS)] = self.data.qfrc_bias[self.dof_adr]
+        return tau

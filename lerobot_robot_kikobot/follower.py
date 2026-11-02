@@ -38,7 +38,7 @@ from .feetech import (
     RESOLUTION,
     FeetechBus,
 )
-from .kinematics import ArmKinematics
+from .kinematics import ArmKinematics, GravityModel
 from .paths import home_pose_path
 from .motion import MotionShaper, SagCorrector
 from .streamer import ServoStreamer
@@ -511,6 +511,7 @@ class KikobotFollower(Robot):
                 [m in cfg.sag_joints for m in self.motor_ids],
                 cfg.sag_time_constant_s,
                 math.radians(cfg.sag_max_deg),
+                GravityModel(),
             )
             if cfg.sag_joints
             else None,
@@ -607,7 +608,9 @@ class KikobotFollower(Robot):
         for key, cam in self.cameras.items():
             obs[key] = cam.read_latest() if hasattr(cam, "read_latest") else cam.async_read()
         if self._display is not None:
-            self._display.update(self.streamer.commanded, self._last_gripper_pct, q)
+            commanded = self.streamer.commanded
+            goal = commanded + self.streamer.correction if len(self.streamer.correction) else None
+            self._display.update(commanded, self._last_gripper_pct, q, goal)
         return obs
 
     @check_if_not_connected

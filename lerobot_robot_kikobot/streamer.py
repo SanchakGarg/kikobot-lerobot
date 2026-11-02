@@ -43,7 +43,9 @@ class ServoStreamer:
         self.period = 1.0 / rate_hz
         self.read_every = max(1, read_every)
         self.sag = sag
-        self._bias = np.zeros(0)
+        # Droop correction added to the goal, radians (zeros without `sag`).
+        self.correction = np.zeros(0)
+        self._capped_warned = 0.0
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -59,7 +61,7 @@ class ServoStreamer:
         self.shaper.reset(initial, now)
         self.present = initial.copy()
         self.commanded = initial.copy()
-        self._bias = np.zeros_like(initial)
+        self.correction = np.zeros_like(initial)
         self._thread = threading.Thread(target=self._run, name="kikobot-servo-stream", daemon=True)
         self._thread.start()
 
@@ -95,7 +97,16 @@ class ServoStreamer:
                 command = self.shaper.step(now)
                 # The goal carries the droop correction; `commanded` stays the
                 # motion itself, for the display and the observation.
-                self.bus.sync_write_goals(self.to_raw(command + self._bias))
+                if self.sag is not None:
+                    self.correction = self.sag.correction(command)
+                    if self.sag.capped.any() and now - self._capped_warned > 30.0:
+                        self._capped_warned = now
+                        logger.warning(
+                            "Sag correction at its cap on joint(s) %s: the servo cannot hold the "
+                            "load there. Raise --robot.sag_max_deg, or see the README on sag.",
+                            np.flatnonzero(self.sag.capped).tolist(),
+                        )
+                self.bus.sync_write_goals(self.to_raw(command + self.correction))
                 self.commanded = command
 
                 if tick % self.read_every == 0:
@@ -105,7 +116,7 @@ class ServoStreamer:
                             self.present = present
                         read_failures = 0
                         if self.sag is not None:
-                            self._bias = self.sag.update(command, present, now - last_read_t)
+                            self.sag.learn(command, present, now - last_read_t)
                         last_read_t = now
                     except ConnectionError as exc:
                         # A corrupted reply now and then is normal on a busy

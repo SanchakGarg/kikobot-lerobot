@@ -97,8 +97,13 @@ class SimDisplay:
         self._camera.azimuth = 135.0
         self._camera.elevation = -25.0
 
-    def update(self, commanded: np.ndarray, gripper_pct: float, measured: np.ndarray) -> None:
-        """Show `commanded` (radians, J1..J6) and plot it against `measured`."""
+    def update(
+        self, commanded: np.ndarray, gripper_pct: float, measured: np.ndarray, goal: np.ndarray | None = None
+    ) -> None:
+        """Show `commanded` (radians, J1..J6) and plot it against `measured`.
+
+        `goal` is what the servos are sent, if it differs (the sag correction).
+        """
         d = self.data
         d.qpos[self._arm_adr] = commanded[: len(ARM_JOINTS)]
         finger = self._grip_closed + np.clip(gripper_pct, 0.0, 100.0) / 100.0 * (self._grip_open - self._grip_closed)
@@ -111,7 +116,12 @@ class SimDisplay:
         if self._rec is not None and now - self._last_frame_t >= 1.0 / RERUN_HZ:
             self._last_frame_t = now
             self._renderer.update_scene(d, camera=self._camera)
-            frame = (self._renderer.render(), np.rad2deg(commanded), np.rad2deg(measured))
+            frame = (
+                self._renderer.render(),
+                np.rad2deg(commanded),
+                np.rad2deg(measured),
+                None if goal is None else np.rad2deg(goal),
+            )
             with self._pending_lock:
                 self._pending = frame
             self._wake.set()
@@ -126,12 +136,14 @@ class SimDisplay:
                 frame, self._pending = self._pending, None
             if frame is None:
                 continue
-            image, commanded, measured = frame
+            image, commanded, measured, goal = frame
             try:
                 self._rec.log(SIM_IMAGE, rr.Image(image).compress(jpeg_quality=JPEG_QUALITY))
                 for i, j in enumerate(ARM_JOINTS):
                     self._rec.log(f"joints/{j}/commanded", rr.Scalars(float(commanded[i])))
                     self._rec.log(f"joints/{j}/measured", rr.Scalars(float(measured[i])))
+                    if goal is not None and goal[i] != commanded[i]:
+                        self._rec.log(f"joints/{j}/goal", rr.Scalars(float(goal[i])))
             except Exception as exc:  # The view is optional; never take teleop down.
                 logger.warning("Rerun display stopped: %s", exc)
                 return

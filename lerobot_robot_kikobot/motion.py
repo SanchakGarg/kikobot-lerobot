@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from collections.abc import Callable
 
 import numpy as np
 
@@ -210,32 +211,54 @@ class MotionShaper:
 
 
 class SagCorrector:
-    """Cancels a joint's steady droop under load, like a slow integral term.
+    """Cancels joints' droop under the arm's weight, in every pose.
 
     A position servo pushes back in proportion to how far it is off its goal,
-    so a heavily loaded joint (J2) settles short of it. While the commanded
-    motion is nearly at rest, this measures that gap and shifts the goal by
-    it, a little at a time, until the measured angle sits on the commanded
-    one. It does not learn during moves, where the gap is tracking lag, not
-    droop, and would make the joint overshoot when it stops.
+    so a loaded joint (J2) settles short of it, by an amount that grows with
+    the gravity torque on it: nothing with the arm upright, most stretched
+    out. The goal is raised by `compliance * gravity torque`, the torque taken
+    from the model at the commanded pose, so the correction follows the arm
+    as it moves. The compliance (rad per N·m) is learned while the arm holds
+    still, from the gap between the commanded and measured angle. It is not
+    learned during moves, where that gap is tracking lag, not droop.
     """
 
     # Commanded speed below which the arm counts as holding still.
     REST_SPEED_RAD_S = math.radians(5.0)
+    # Below this gravity torque (N·m) the droop is too small to learn from.
+    MIN_TORQUE_NM = 0.05
 
-    def __init__(self, mask: np.ndarray, time_constant_s: float, max_rad: float):
+    def __init__(
+        self,
+        mask: np.ndarray,
+        time_constant_s: float,
+        max_rad: float,
+        gravity: Callable[[np.ndarray], np.ndarray],
+    ):
         self.mask = np.asarray(mask, dtype=float)
         self.time_constant_s = time_constant_s
         self.max_rad = max_rad
-        self.bias = np.zeros(len(self.mask))
+        self.gravity = gravity
+        self.compliance = np.zeros(len(self.mask))
+        self.capped = np.zeros(len(self.mask), dtype=bool)
         self._last_command: np.ndarray | None = None
 
-    def update(self, command: np.ndarray, present: np.ndarray, dt: float) -> np.ndarray:
-        """Learn from one measurement; return the goal offset to add (radians)."""
+    def correction(self, command: np.ndarray) -> np.ndarray:
+        """Goal offset (radians) that cancels the droop at `command`."""
+        raw = self.mask * self.compliance * self.gravity(command)
+        self.capped = np.abs(raw) > self.max_rad
+        return np.clip(raw, -self.max_rad, self.max_rad)
+
+    def learn(self, command: np.ndarray, present: np.ndarray, dt: float) -> None:
+        """Update the compliance from one measurement, taken with the current correction on."""
         if self._last_command is not None and dt > 0 and self.time_constant_s > 0:
-            speed = np.abs(command - self._last_command) / dt
-            at_rest = (speed < self.REST_SPEED_RAD_S) * self.mask
-            self.bias += at_rest * (command - present) * min(dt / self.time_constant_s, 1.0)
-            np.clip(self.bias, -self.max_rad, self.max_rad, out=self.bias)
+            at_rest = np.abs(command - self._last_command) / dt < self.REST_SPEED_RAD_S
+            tau = self.gravity(command)
+            learn = at_rest & (self.mask > 0) & (np.abs(tau) > self.MIN_TORQUE_NM)
+            # What is still missing, per N·m, closed a fraction per measurement.
+            gain = min(dt / self.time_constant_s, 1.0)
+            step = np.divide(command - present, tau, out=np.zeros_like(tau), where=learn)
+            self.compliance += gain * step
+            # Gravity only ever pulls a joint down, so the compliance is not negative.
+            np.maximum(self.compliance, 0.0, out=self.compliance)
         self._last_command = command.copy()
-        return self.bias

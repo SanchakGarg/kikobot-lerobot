@@ -507,16 +507,35 @@ the left panel.
 
 <a id="sag"></a>**Sag under load.** A position servo only pushes back in
 proportion to how far it is off its goal, so a heavily loaded joint (J2,
-which lifts the whole arm) settles a few degrees low. While the arm holds
-still, the goal of each joint in `--robot.sag_joints` (default `[J2]`) is
-shifted until its measured angle sits on the commanded one; in rerun the
-two lines then meet. It builds up over about `sag_time_constant_s` (0.5 s)
-after each stop and is not learned during moves, so it adds no overshoot.
-Add J3 if it droops too: `--robot.sag_joints='[J2,J3]'`. If the arm sags
-more than `sag_max_deg` (15°), or the servo gets hot, the joint needs more
-torque than the servo has: a stronger servo (STS3250 instead of STS3215),
-a counterbalance spring, or a lighter forearm and gripper. Check the 12 V
-supply too: a sagging supply weakens every servo.
+which lifts the whole arm) settles low, and more so the further the arm
+reaches out. For each joint in `--robot.sag_joints` (default `[J2]`), the
+goal is raised by the joint's *give* times the gravity torque on it, which
+comes from the MuJoCo model at the commanded pose. So the correction follows
+the arm as it moves: none upright, most stretched out. The give (degrees
+per N·m) is learned while the arm holds still, over about
+`sag_time_constant_s` (0.5 s); hold the arm still out to the side for a
+couple of seconds after connecting, and it is right in every pose from
+then on. It is not learned during moves, so it adds no overshoot.
+
+In rerun, each corrected joint's plot gets a third line, **goal**: what the
+servo is actually sent. Commanded and measured should meet, with goal above
+them by the correction.
+
+- **Measured still below commanded, and goal is far above:** the servo
+  cannot hold the load. The log says `Sag correction at its cap` once the
+  correction reaches `sag_max_deg` (15°). Raise it a little, but the real fix
+  is torque: a stronger servo (STS3250 instead of STS3215), a counterbalance
+  spring, a lighter forearm and gripper, or a stiffer 12 V supply.
+- **Measured meets commanded, but the arm still looks lower than the sim:**
+  the servo is where it was told; the droop is elsewhere. Either the arm
+  flexes or the horn slips (play between the servo and the link, which the
+  servo's encoder cannot see: tighten the horn screw, check for printed-part
+  flex), or J2's zero is off: run calibrate, `check`, and compare J2 in the
+  ready pose ([check the directions](#check-directions)); redo `J2` if needed.
+- **No goal line at all:** the joint is not in `--robot.sag_joints`, or the
+  plugin is out of date (`git pull`).
+
+Add J3 if it droops too: `--robot.sag_joints='[J2,J3]'`.
 
 <a id="joint-direction"></a>**Joint direction.** Some servos are mounted so
 that they turn opposite to the model. `--robot.inverted_joints` lists those
