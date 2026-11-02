@@ -14,7 +14,7 @@ requires-python = ">=3.12"
 # lerobot is installed from source first (see README), so it is not pinned here.
 dependencies = [
     "lerobot",
-    "mujoco>=3.16",
+    "mujoco>=3.15",
     "numpy>=2",
     "glfw>=2.9",
     "feetech-servo-sdk>=1.0",
@@ -23,6 +23,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# The Newton engine and MuJoCo Warp's ray-traced renderer for kikobot-sim-server
+# (NVIDIA GPU; on a machine without CUDA, Newton falls back to MuJoCo's C solver).
+newton = ["newton[sim,importers]>=1.7", "warp-lang>=1.17", "trimesh"]
 
 [project.scripts]
 kikobot-sim-server = "lerobot_robot_kikobot.sim_server:main"

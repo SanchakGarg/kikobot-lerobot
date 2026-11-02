@@ -12,13 +12,12 @@ from lerobot.cameras import CameraConfig
 from lerobot.robots import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
 
-from .protocol import DEFAULT_PORT
+from .protocol import ARM_JOINTS, DEFAULT_PORT  # noqa: F401 - ARM_JOINTS is re-exported
 
 # The Isaac Sim server listens here by default, so both servers can run at once.
 ISAAC_DEFAULT_PORT = DEFAULT_PORT + 1
 SIM_BACKENDS = ("mujoco", "isaac", "none")
 
-ARM_JOINTS = ("J1", "J2", "J3", "J4", "J5", "J6")
 
 
 def default_port() -> str:

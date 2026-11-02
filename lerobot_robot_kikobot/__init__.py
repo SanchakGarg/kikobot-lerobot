@@ -9,19 +9,26 @@ LeRobot imports this package because its distribution name starts with
     --teleop.type=kikobot_gamepad    6-DOF Cartesian gamepad control
 """
 
-from .config import KikobotFollowerConfig, KikobotGamepadConfig, KikobotIsaacConfig, KikobotSimConfig
-from .follower import KikobotFollower
-from .gamepad import KikobotGamepad
-from .isaac import KikobotIsaac
-from .sim import KikobotSim
+try:
+    import lerobot  # noqa: F401
+except ImportError:
+    # The sim server alone (`kikobot-sim-server`, e.g. in a Newton environment)
+    # needs no LeRobot; the LeRobot devices are only registered with it.
+    __all__: list[str] = []
+else:
+    from .config import KikobotFollowerConfig, KikobotGamepadConfig, KikobotIsaacConfig, KikobotSimConfig
+    from .follower import KikobotFollower
+    from .gamepad import KikobotGamepad
+    from .isaac import KikobotIsaac
+    from .sim import KikobotSim
 
-__all__ = [
-    "KikobotFollower",
-    "KikobotFollowerConfig",
-    "KikobotGamepad",
-    "KikobotGamepadConfig",
-    "KikobotIsaac",
-    "KikobotIsaacConfig",
-    "KikobotSim",
-    "KikobotSimConfig",
-]
+    __all__ = [
+        "KikobotFollower",
+        "KikobotFollowerConfig",
+        "KikobotGamepad",
+        "KikobotGamepadConfig",
+        "KikobotIsaac",
+        "KikobotIsaacConfig",
+        "KikobotSim",
+        "KikobotSimConfig",
+    ]

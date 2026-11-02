@@ -10,7 +10,7 @@ from __future__ import annotations
 import mujoco
 import numpy as np
 
-from .config import ARM_JOINTS
+from .protocol import ARM_JOINTS
 from .paths import ARM_SCENE_PATH
 
 # Grasp centre in the `eof` body frame, measured between the two jaw meshes.

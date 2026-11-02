@@ -12,6 +12,10 @@ sets the actuator targets, and the arm moves there on the following physics
 steps, as the real servos do with the same goal. No shaping or filtering sits
 in between, so the sim shows exactly what the servos are told. The protocol
 is in `protocol.py`.
+
+The physics can run on MuJoCo or on NVIDIA Newton (`--engine`), and the
+camera images come from MuJoCo's OpenGL renderer or MuJoCo Warp's ray tracer
+(`--renderer`); see `sim_backends.py`. Either way the scene is the same.
 """
 
 from __future__ import annotations
@@ -27,16 +31,18 @@ from typing import Any
 import mujoco
 import numpy as np
 
-from .config import ARM_JOINTS
+from .protocol import ARM_JOINTS
 from .kinematics import ArmKinematics
-from .env.mujoco_scene import SCENE_NAMES, RoomLights, build_scene
+from .env.mujoco_scene import SCENE_NAMES, RoomLights, build_scene, scene_mjcf
 from .env.room import fixed_lighting, lab_room, sample_lighting
 from .protocol import DEFAULT_PORT, IMAGE_ENCODINGS, PROTOCOL_VERSION, pack, pack_observation, unpack
+from .sim_backends import ENGINES, RENDERERS, MjWarpRenderer, NewtonEngine, OpenGLRenderer, resolve_engine, resolve_renderer
 
 logger = logging.getLogger(__name__)
 
 PHYSICS_DT_S = 0.002
 VIEWER_HZ = 60.0
+WINDOWS = ("mujoco", "newton", "none")
 # Further behind real time than this (a slow render, a stalled machine), the
 # sim drops the time instead of racing to catch up.
 MAX_LAG_S = 0.05
@@ -60,8 +66,12 @@ class SimWorld:
         seed: int | None = None,
         timestep: float = PHYSICS_DT_S,
         randomize_lighting: bool = True,
+        engine: str = "mujoco",
+        renderer: str = "opengl",
     ):
         self.scene = scene
+        self.engine_name = resolve_engine(engine)
+        self.renderer_name = resolve_renderer(renderer, self.engine_name)
         if scene in SCENE_NAMES:
             # The arm in the lab (env/room.py), with the task on its table.
             self.room = lab_room()
@@ -105,7 +115,13 @@ class SimWorld:
         self.randomize_lighting = randomize_lighting
         self._lights = RoomLights(m, self.room) if self.room is not None else None
         self.ready = ArmKinematics().ready_q()
-        self._renderers: dict[tuple[int, int], mujoco.Renderer] = {}
+        # Who steps the physics (the MuJoCo model stays the scene of record),
+        # and who draws the cameras. See sim_backends.py.
+        self._engine = None
+        if self.engine_name == "newton":
+            mjcf = scene_mjcf(scene, self.room) if scene in SCENE_NAMES else scene
+            self._engine = NewtonEngine(mjcf, m)
+        self._renderer = MjWarpRenderer(m) if self.renderer_name == "mjwarp" else OpenGLRenderer(m)
         self.reset()
 
     # ----------------------------------------------------------------- state
@@ -127,6 +143,8 @@ class SimWorld:
         """New actuator targets (radians); physics moves the arm there."""
         self.data.ctrl[self._arm_act] = np.clip(q, self.lower, self.upper)
         self.data.ctrl[self._grip_act] = self._grip_ctrl(gripper_pct)
+        if self._engine is not None:
+            self._engine.set_ctrl(self.data.ctrl)
 
     def pose(self, q: np.ndarray, gripper_pct: float) -> None:
         """Put the arm at `q` at once, at rest, and hold it there."""
@@ -140,9 +158,16 @@ class SimWorld:
         d.qvel[self._finger_dof] = 0.0
         self.command(q, gripper_pct)
         mujoco.mj_forward(m, d)
+        if self._engine is not None:
+            # Everything a reset or a teleport set in the MuJoCo data, into Newton.
+            self._engine.push(d)
 
     def step(self, n: int) -> None:
-        mujoco.mj_step(self.model, self.data, nstep=n)
+        if self._engine is None:
+            mujoco.mj_step(self.model, self.data, nstep=n)
+        else:
+            self._engine.step(n)
+            self._engine.pull(self.model, self.data)
 
     def reset(self, ready: np.ndarray | None = None) -> None:
         """Arm to the ready pose, jaws open, object and pad respawned (or a new
@@ -161,6 +186,7 @@ class SimWorld:
         else:
             self._respawn_objects()
         self.pose(ready, 100.0)
+        self._renderer.looks_changed()
 
     def _sample_xy(self) -> np.ndarray:
         r = self.rng.uniform(*SPAWN_RADIUS_M)
@@ -194,30 +220,27 @@ class SimWorld:
     def render(self, cameras: list[str], width: int, height: int) -> dict[str, np.ndarray]:
         if not cameras:
             return {}
-        key = (int(width), int(height))
-        if key not in self._renderers:
-            self._renderers[key] = mujoco.Renderer(self.model, height=key[1], width=key[0])
-        r = self._renderers[key]
-        out = {}
-        for cam in cameras:
-            r.update_scene(self.data, camera=cam)
-            out[cam] = r.render()
-        return out
+        return self._renderer.render(self.data, cameras, width, height)
 
     def close(self) -> None:
-        for r in self._renderers.values():
-            r.close()
-        self._renderers.clear()
+        self._renderer.close()
 
 
 class SimServer:
     """Steps `world` in real time and answers protocol requests between steps."""
 
-    def __init__(self, world: SimWorld, host: str = "127.0.0.1", port: int = DEFAULT_PORT, viewer: bool = True):
+    def __init__(self, world: SimWorld, host: str = "127.0.0.1", port: int = DEFAULT_PORT, viewer: bool | str = True):
         self.world = world
         self.host, self.port = host, port
-        self.viewer_enabled = viewer
+        # mujoco: MuJoCo's window on the full scene (both engines). newton:
+        # Newton's ViewerGL on its own copy (plain colours). none / False: no window.
+        self.window = {True: "mujoco", False: "none"}.get(viewer, viewer)
+        if self.window not in WINDOWS:
+            raise ValueError(f"window must be one of {WINDOWS}, not {viewer!r}.")
+        if self.window == "newton" and world._engine is None:
+            raise ValueError("--window newton needs --engine newton.")
         self._viewer = None
+        self._gl = None
         self.stop_event = threading.Event()
 
     # -------------------------------------------------------------- handlers
@@ -268,7 +291,12 @@ class SimServer:
         sock.setsockopt(zmq.LINGER, 0)
         sock.bind(f"tcp://{self.host}:{self.port}")
         w = self.world
-        if self.viewer_enabled:
+        if self.window == "newton":
+            from newton.viewer import ViewerGL
+
+            self._gl = ViewerGL()
+            self._gl.set_model(w._engine.nm)
+        elif self.window == "mujoco":
             import mujoco.viewer
 
             try:
@@ -290,6 +318,8 @@ class SimServer:
             while not self.stop_event.is_set():
                 if self._viewer is not None and not self._viewer.is_running():
                     break
+                if self._gl is not None and not self._gl.is_running():
+                    break
                 now = time.perf_counter()
                 behind = (now - start - dropped) - sim_t
                 if behind > MAX_LAG_S:
@@ -301,8 +331,13 @@ class SimServer:
                         w.step(n)
                     sim_t += n * dt
                     steps_since_stats += n
-                if self._viewer is not None and now - last_sync >= 1.0 / VIEWER_HZ:
-                    self._viewer.sync()
+                if now - last_sync >= 1.0 / VIEWER_HZ:
+                    if self._viewer is not None:
+                        self._viewer.sync()
+                    elif self._gl is not None:
+                        self._gl.begin_frame(sim_t)
+                        self._gl.log_state(w._engine.s0)
+                        self._gl.end_frame()
                     last_sync = now
                 if now - last_stats >= STATS_EVERY_S:
                     logger.info("Real-time factor %.2f.", steps_since_stats * dt / (now - last_stats))
@@ -330,6 +365,9 @@ class SimServer:
             if self._viewer is not None:
                 self._viewer.close()
                 self._viewer = None
+            if self._gl is not None:
+                self._gl.close()
+                self._gl = None
             w.close()
 
 
@@ -339,14 +377,25 @@ def main(argv: list[str] | None = None) -> None:
                    help=f"{' | '.join(SCENE_NAMES)} (the arm in the lab), or a path to an MJCF file")
     p.add_argument("--host", default="127.0.0.1", help="address to listen on (0.0.0.0 for other machines)")
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
-    p.add_argument("--no-viewer", dest="viewer", action="store_false", help="run without the MuJoCo window")
+    p.add_argument("--window", choices=WINDOWS, default="mujoco",
+                   help="mujoco: MuJoCo's window on the full scene (with either engine); newton: "
+                        "Newton's ViewerGL (needs --engine newton; plain colours); none")
+    p.add_argument("--no-viewer", dest="window", action="store_const", const="none", help="same as --window none")
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--timestep", type=float, default=PHYSICS_DT_S, help="physics step, seconds")
     p.add_argument("--fixed-lighting", action="store_true", help="the same room light every reset")
+    p.add_argument("--engine", choices=ENGINES, default="auto",
+                   help="physics: mujoco (CPU), or newton (MuJoCo Warp on a CUDA GPU); auto picks "
+                        "newton when it is installed and a GPU is there")
+    p.add_argument("--renderer", choices=RENDERERS, default="auto",
+                   help="camera images: opengl, or mjwarp (ray-traced, GPU); auto picks mjwarp with newton")
     args = p.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    world = SimWorld(args.scene, args.seed, args.timestep, randomize_lighting=not args.fixed_lighting)
-    server = SimServer(world, args.host, args.port, args.viewer)
+    # force: importing the package imports LeRobot, which may have set up logging already.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
+    world = SimWorld(args.scene, args.seed, args.timestep, randomize_lighting=not args.fixed_lighting,
+                     engine=args.engine, renderer=args.renderer)
+    logger.info("Engine %s, renderer %s.", world.engine_name, world.renderer_name)
+    server = SimServer(world, args.host, args.port, args.window)
     try:
         server.serve()
     except KeyboardInterrupt:

@@ -44,10 +44,10 @@ def _texture_name(m) -> str:
     return f"room_tex_{m.pattern}_{round(m.contrast * 100)}"
 
 
-def _add_materials(spec: mujoco.MjSpec, room: RoomSpec) -> None:
+def _add_materials(spec: mujoco.MjSpec, room: RoomSpec, textures: bool = True) -> None:
     made = set()
     for m in room.materials.values():
-        if not m.pattern or _texture_name(m) in made:
+        if not textures or not m.pattern or _texture_name(m) in made:
             continue
         made.add(_texture_name(m))
         size = TEXTURE_SIZE * 2 if m.pattern == "wood" else TEXTURE_SIZE
@@ -67,7 +67,7 @@ def _add_materials(spec: mujoco.MjSpec, room: RoomSpec) -> None:
             reflectance=float(0.12 * m.metallic + (0.06 if m.roughness < 0.3 else 0.0)),
             emission=float(m.emission),
         )
-        if m.pattern:
+        if textures and m.pattern:
             mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = _texture_name(m)
             mat.texuniform = True
             mat.texrepeat = [m.repeat, m.repeat]
@@ -152,15 +152,22 @@ def _add_pick_place(spec: mujoco.MjSpec, cylinder: bool) -> None:
                  rgba=[0.13, 0.72, 0.25, 1.0], friction=[1.5, 0.02, 0.002], condim=4)
 
 
-def build_scene(name: str, room: RoomSpec | None = None) -> mujoco.MjSpec:
-    """The arm in the lab, with the named task on its table."""
+def build_scene(name: str, room: RoomSpec | None = None, textures: bool = True) -> mujoco.MjSpec:
+    """The arm in the lab, with the named task on its table.
+
+    `textures=False` leaves out the (in-memory) textures, so the spec can be
+    written out as MJCF (`to_xml`) for an engine that imports MJCF, such as
+    Newton: same bodies, joints and actuators, plain colours.
+    """
     if name not in SCENE_NAMES:
         raise ValueError(f"Unknown scene {name!r}; use one of {SCENE_NAMES}.")
     room = room or lab_room()
     spec = mujoco.MjSpec.from_file(str(MODELS_DIR / "robot.xml"))
     spec.modelname = f"kikobot_{name}"
+    # Absolute, so the MJCF written from this spec finds the arm's meshes anywhere.
+    spec.meshdir = str(MODELS_DIR / "assets")
     _visual(spec)
-    _add_materials(spec, room)
+    _add_materials(spec, room, textures)
     for p in room.parts:
         _add_part(spec, p)
     _add_lights(spec, room)
@@ -170,8 +177,29 @@ def build_scene(name: str, room: RoomSpec | None = None) -> mujoco.MjSpec:
     elif name == "desk_sort":
         from ..desk.mujoco_desk import add_desk  # noqa: PLC0415
 
-        add_desk(spec)
+        add_desk(spec, textures=textures)
     return spec
+
+
+def scene_mjcf(name: str, room: RoomSpec | None = None) -> str:
+    """The scene as MJCF text, without textures (see `build_scene`).
+
+    Position actuators carry their damping as `dampratio`, which MuJoCo turns
+    into a velocity gain when it compiles; MJCF importers such as Newton's
+    skip it, and the servos then ring. So the compiled gain is written out
+    explicitly.
+    """
+    spec = build_scene(name, room, textures=False)
+    return explicit_damping_mjcf(spec)
+
+
+def explicit_damping_mjcf(spec: mujoco.MjSpec) -> str:
+    model = spec.compile()
+    for i, act in enumerate(spec.actuators):
+        bias = list(act.biasprm)
+        bias[2] = float(model.actuator_biasprm[i][2])  # -kv, once compiled
+        act.biasprm = bias
+    return spec.to_xml()
 
 
 class RoomLights:

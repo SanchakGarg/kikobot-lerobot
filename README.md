@@ -368,8 +368,36 @@ $V/lerobot-teleoperate --robot.type=kikobot_sim --teleop.type=kikobot_gamepad --
 
 Server options: `--scene` (`pick_place`, `cylinder`, `desk_sort`, `empty`, or a path to
 an MJCF file, used as is, without the lab), `--host` (`127.0.0.1`; `0.0.0.0`
-to accept other machines), `--port` (5556), `--no-viewer`, `--seed`,
-`--timestep` (0.002 s), `--fixed-lighting`.
+to accept other machines), `--port` (5556), `--window` (`mujoco`, `newton`,
+`none`; `--no-viewer` = `none`), `--seed`, `--timestep` (0.002 s),
+`--fixed-lighting`, `--engine` and `--renderer` (below).
+
+<a id="newton"></a>**Newton physics and ray-traced cameras (NVIDIA GPU).** The
+server can step the physics with NVIDIA's [Newton](https://github.com/newton-physics/newton)
+(its MuJoCo solver, run on the GPU by MuJoCo Warp) and render the cameras
+with MuJoCo Warp's ray tracer: ray-traced shadows, textures and
+anti-aliasing, instead of OpenGL shadow maps. Install the extra into the
+same venv on the GPU machine:
+
+```bash
+$V/pip install -e ".[newton]"      # Newton, Warp, MuJoCo Warp; pins MuJoCo 3.15
+$V/kikobot-sim-server --scene desk_sort --engine newton --renderer mjwarp
+```
+
+| Option | Values | Default |
+|---|---|---|
+| `--engine` | `mujoco` (CPU), `newton` | `auto`: `newton` when it is installed and a CUDA GPU is there |
+| `--renderer` | `opengl`, `mjwarp` (GPU ray tracing) | `auto`: `mjwarp` with the Newton engine on a GPU |
+| `--window` | `mujoco` (the full scene, with either engine), `newton` (Newton's ViewerGL, plain colours) | `mujoco` |
+
+Either way the scene is the same: the server's MuJoCo model, with the lab
+and the desk looks, stays the scene of record; Newton gets it as MJCF and
+steps it, and the joint positions come back by name each step. The servo
+model is the same too (an import would drop the actuators' damping; it is
+written out explicitly), so a commanded joint moves the same way on both
+engines. On a Mac or any machine without CUDA, `--engine newton` runs
+Newton with MuJoCo's C solver, and `mjwarp` on Warp's CPU backend (seconds
+per frame): fine for checking it works, not for teleop.
 
 Sim robot options (`--robot.<name>=`): `host` / `port` (where the server
 is), `camera_names` (`[record]`; `overhead` too), `width` / `height`

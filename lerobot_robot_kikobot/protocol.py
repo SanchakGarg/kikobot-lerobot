@@ -36,6 +36,8 @@ from typing import Any
 import numpy as np
 
 PROTOCOL_VERSION = 2
+# The arm's joints, in the order every message and action uses.
+ARM_JOINTS = ("J1", "J2", "J3", "J4", "J5", "J6")
 DEFAULT_PORT = 5556
 IMAGE_ENCODINGS = ("raw", "jpeg")
 JPEG_QUALITY = 90

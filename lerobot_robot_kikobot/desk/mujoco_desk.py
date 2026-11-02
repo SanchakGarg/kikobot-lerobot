@@ -57,8 +57,8 @@ def _phong(roughness: float, metallic: float) -> dict[str, float]:
     )
 
 
-def _add_looks(spec: mujoco.MjSpec) -> None:
-    for name in T.PATTERNS:
+def _add_looks(spec: mujoco.MjSpec, textures: bool = True) -> None:
+    for name in T.PATTERNS if textures else ():
         gray = PRINT_LEVEL + (1.0 - PRINT_LEVEL) * np.clip(T.PATTERNS[name](TEXTURE_SIZE), 0.0, 1.0)
         img = (gray * 255.0 + 0.5).astype(np.uint8)
         h, w = img.shape
@@ -126,10 +126,11 @@ def _colliders(body, item: L.PoolItem) -> None:
         body.add_geom(name=f"{body.name}_col", type=mujoco.mjtGeom.mjGEOM_BOX, size=[hx, hy, hz], **common)
 
 
-def add_desk(spec: mujoco.MjSpec, pool: list[L.PoolItem] | None = None) -> list[L.PoolItem]:
-    """The stations and every pool item (parked under the table)."""
+def add_desk(spec: mujoco.MjSpec, pool: list[L.PoolItem] | None = None, textures: bool = True) -> list[L.PoolItem]:
+    """The stations and every pool item (parked under the table). `textures=False`:
+    plain colours, so the spec can be written as MJCF (see mujoco_scene.build_scene)."""
     pool = pool if pool is not None else L.default_pool()
-    _add_looks(spec)
+    _add_looks(spec, textures)
     for st in L.STATIONS:
         _station_geoms(spec, st)
     for i, item in enumerate(pool):
@@ -141,7 +142,8 @@ def add_desk(spec: mujoco.MjSpec, pool: list[L.PoolItem] | None = None) -> list[
         body.mass = m
         body.inertia = [m / 3 * (hy**2 + hz**2), m / 3 * (hx**2 + hz**2), m / 3 * (hx**2 + hy**2)]
         body_mat = spec.add_material(name=f"desk_{item.name}_body", rgba=[0.8, 0.8, 0.8, 1.0])
-        body_mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "desk_tex_solid"
+        if textures:
+            body_mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "desk_tex_solid"
         spec.add_material(name=f"desk_{item.name}_accent", rgba=[0.1, 0.1, 0.8, 1.0])
         for j, (role, mesh) in enumerate(M.procedural_item(item.kind)):
             mesh_name = f"desk_{item.name}_mesh{j}"
