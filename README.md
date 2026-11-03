@@ -143,6 +143,30 @@ Step 8 walks you through every joint: min, any middle point, max
 ([calibration](#calibration)).
 To check the controller is seen by Linux: `ls /dev/input/by-id/ | grep -i joystick`.
 
+**Ubuntu: the real arm through the arm server.** Instead of step 9, run the
+arm as its own server, so the gamepad and the servo limits page can both
+reach it at once ([6a](#6a-the-arm-server)). One terminal each, after
+calibrating (step 8):
+
+```bash
+# Terminal 1 (optional): the sim server, so the sim arm mirrors the real one.
+~/lerobot/.venv/bin/kikobot-sim-server
+
+# Terminal 2: the arm server. Opens the servo bus and holds the arm; leave it running.
+~/lerobot/.venv/bin/kikobot-arm-server --robot.port=/dev/ttyACM0 --robot.id=kikobot
+
+# Terminal 3: drive it with the gamepad.
+~/lerobot/.venv/bin/lerobot-teleoperate --robot.type=kikobot_arm \
+  --teleop.type=kikobot_gamepad --teleop.robot_id=kikobot --fps=60
+
+# Terminal 4 (optional): the servo limits page, at http://127.0.0.1:8080
+~/lerobot/.venv/bin/kikobot-servo-web
+```
+
+On a Raspberry Pi with the Driver HAT, use `--robot.port=/dev/serial0`
+([Pi notes](#pi-hat)). To drive it from a laptop, add `--host=0.0.0.0` to the
+arm server and `--robot.host=<Pi's IP>` to the teleop.
+
 ### Windows 10 / 11 (PowerShell)
 
 Install Python 3.12 from python.org (tick "Add python.exe to PATH") and
