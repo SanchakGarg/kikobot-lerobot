@@ -188,6 +188,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--ids", default="1,2,3,4,5,6,7", help="with --bus: bus IDs of J1..J6 and the gripper")
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logger.info("Starting the servo limits page...")
 
     if args.bus:
         backend: Any = _bus_backend(args)

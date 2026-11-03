@@ -10,7 +10,25 @@ LeRobot imports this package because its distribution name starts with
     --teleop.type=kikobot_gamepad    6-DOF Cartesian gamepad control
 """
 
+import sys
+from pathlib import Path
+
+# Tools that never use LeRobot skip importing it (and with it torch, OpenCV and
+# the camera stack), which can take a minute on a slow machine before they
+# print anything.
+_NO_LEROBOT = {"kikobot-servo-web", "servo_web.py", "lerobot_robot_kikobot.servo_web"}
+
+
+def _skip_lerobot() -> bool:
+    # `python -m pkg.mod` imports the package while sys.argv[0] is still "-m";
+    # sys.orig_argv keeps the module name.
+    args = [*sys.argv[:1], *getattr(sys, "orig_argv", [])]
+    return any(Path(a).name in _NO_LEROBOT or a in _NO_LEROBOT for a in args)
+
+
 try:
+    if _skip_lerobot():
+        raise ImportError
     import lerobot  # noqa: F401
 except ImportError:
     # The sim server alone (`kikobot-sim-server`, e.g. in a Newton environment)
