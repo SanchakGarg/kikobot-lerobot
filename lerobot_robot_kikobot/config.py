@@ -20,10 +20,19 @@ SIM_BACKENDS = ("mujoco", "isaac", "none")
 
 
 
+# Linux ports tried in order when --robot.port is not given. USB adapters
+# (Feetech URT-1, Waveshare Bus Servo Adapter, or the Waveshare Bus Servo
+# Driver HAT with its jumper on A) enumerate as ttyACM* (CH343) or ttyUSB*
+# (CH340, FTDI). The Driver HAT with its jumper on B talks over the Raspberry
+# Pi's GPIO UART, which is /dev/serial0.
+LINUX_PORTS = ("/dev/kikobot", "/dev/ttyACM0", "/dev/ttyUSB0", "/dev/serial0")
+
+
 def default_port() -> str:
-    # Feetech's URT-1 / CH343 boards enumerate as ttyACM*; CH340 clones as
-    # ttyUSB*. `lerobot-find-port` tells you which one you have.
-    return "COM3" if os.name == "nt" else "/dev/ttyACM0"
+    """The first servo port that exists; `lerobot-find-port` finds others."""
+    if os.name == "nt":
+        return "COM3"
+    return next((p for p in LINUX_PORTS if os.path.exists(p)), "/dev/ttyACM0")
 
 
 @RobotConfig.register_subclass("kikobot_sim")

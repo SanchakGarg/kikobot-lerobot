@@ -61,7 +61,9 @@ class FeetechBus:
         if not self.port.openPort():
             raise ConnectionError(
                 f"Could not open {port}. Check the cable and the port name "
-                "(`lerobot-find-port`); on Linux also that you are in the 'dialout' group."
+                "(`lerobot-find-port`); on Linux also that you are in the 'dialout' group. "
+                "Raspberry Pi GPIO UART (/dev/serial0, Driver HAT jumper on B): enable the "
+                "serial port and disable the login shell over serial in raspi-config."
             )
         if not self.port.setBaudRate(baudrate):
             self.port.closePort()

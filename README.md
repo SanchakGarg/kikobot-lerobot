@@ -425,7 +425,10 @@ Isaac Sim has its own server, with the same protocol:
 
 **1. Find the port.** `$V/lerobot-find-port`. Usually `COM3` on Windows,
 `/dev/ttyACM0` (or `/dev/ttyUSB0`) on Ubuntu, or `/dev/kikobot` with the udev
-rule installed.
+rule installed. On Linux, leaving out `--robot.port` uses the first of
+`/dev/kikobot`, `/dev/ttyACM0`, `/dev/ttyUSB0` and `/dev/serial0` that exists.
+A Waveshare Bus Servo Driver HAT on a Raspberry Pi has its own steps:
+[Raspberry Pi + Driver HAT](#pi-hat).
 
 <a id="calibration"></a>**2. Calibrate (once).** This matches the real
 arm to the sim: each joint's two ends are mapped onto the MuJoCo model's
@@ -714,7 +717,7 @@ jobs: [docs/datagen-openvla.md](docs/datagen-openvla.md).
 
 | | Ubuntu | Windows | macOS |
 |---|---|---|---|
-| Serial port | `/dev/ttyACM0`, `/dev/ttyUSB0` or `/dev/kikobot` | `COM3` etc. | `/dev/tty.usbmodem*` |
+| Serial port | `/dev/ttyACM0`, `/dev/ttyUSB0` or `/dev/kikobot`; `/dev/serial0` on a Pi with the Driver HAT ([below](#pi-hat)) | `COM3` etc. | `/dev/tty.usbmodem*` |
 | Port permission | `dialout` group or the udev rule | none | none |
 | Sim server window | `kikobot-sim-server` | `kikobot-sim-server.exe` | `mjpython -m lerobot_robot_kikobot.sim_server` |
 | Gamepad | needs a desktop session (GLFW) | works | works |
@@ -730,8 +733,8 @@ to about 1 ms on all three.
 | Problem | Fix |
 |---|---|
 | `kikobot_*` is not a valid type | The plugin failed to import, or the old KikoBot plugin with the same name is installed. Run the check in [3](#3-install). |
-| `Could not open /dev/ttyACM0` | Wrong port (`lerobot-find-port`), or not in `dialout` (log out and in after `usermod`). |
-| `There is no status packet!` | A servo stopped replying after answering the ping. Transactions are retried and sync read falls back to single reads automatically; if it persists, the full error names the servo: check its cable and the supply (a sagging 12 V drops replies). Waveshare adapter: jumper on **A**. |
+| `Could not open /dev/ttyACM0` | Wrong port (`lerobot-find-port`), or not in `dialout` (log out and in after `usermod`). `/dev/serial0` on a Pi: the serial port is off or the serial console holds it ([Driver HAT](#pi-hat)). |
+| `There is no status packet!` | A servo stopped replying after answering the ping. Transactions are retried and sync read falls back to single reads automatically; if it persists, the full error names the servo: check its cable and the supply (a sagging 12 V drops replies). Waveshare adapter, or Driver HAT on USB: jumper on **A**; Driver HAT on the Pi's GPIO: jumper on **B**, and on a Pi 3/4 the `disable-bt` overlay ([Driver HAT](#pi-hat)). |
 | `No sim server at tcp://127.0.0.1:5556` | Start `kikobot-sim-server` first (or the Isaac server with `--robot.sim_backend=isaac`). The real arm runs without it; `--robot.sim_backend=none` silences the warning. |
 | `No reply from the sim server` (kikobot_sim / kikobot_isaac) | The server is not running, or is on another port: check `--robot.port`. |
 | No rerun window opens with `--display_data=true` | `rerun-sdk` comes with LeRobot's `core_scripts` extra; otherwise `pip install rerun-sdk`. |
@@ -770,3 +773,45 @@ One line: a lowercase type, a colon, then a short summary of what changed.
 | `chore:` | Tooling, ignores, housekeeping |
 
 Example: `feat: write servo goals straight to the bus like the SO-101`
+<a id="pi-hat"></a>
+
+### Raspberry Pi + Waveshare Bus Servo Driver HAT
+
+The Waveshare **Bus Servo Driver HAT (A)** works in place of the Bus Servo
+Adapter / Feetech URT-1: it drives the same STS servos with the same protocol
+at the same 1 Mbps. (The HAT (B) is for SC-series servos, not the STS3215.)
+Its UART jumper picks how it is driven:
+
+- **Jumper on A (USB):** plug the HAT's USB port into any PC. It has the same
+  CH343 chip as the adapter, so it shows up as `/dev/ttyACM0` / `COM3` and
+  everything above applies unchanged, udev rule included.
+- **Jumper on B (Raspberry Pi GPIO):** the Pi drives the bus through its GPIO
+  UART, `/dev/serial0`. Set the Pi up once:
+
+```bash
+# Serial port on, login shell over serial off: raspi-config → Interface
+# Options → Serial Port → "login shell" No, "serial port hardware" Yes.
+sudo raspi-config nonint do_serial_hw 0
+sudo raspi-config nonint do_serial_cons 1
+# Pi 3 / 4 / Zero 2 W only: give the GPIO pins the full UART instead of the
+# mini UART, whose baud rate drifts with the CPU clock. Bluetooth goes off.
+# (Pi 5 needs nothing here.)
+echo dtoverlay=disable-bt | sudo tee -a /boot/firmware/config.txt
+sudo systemctl disable --now hciuart
+sudo usermod -aG dialout $USER
+sudo reboot
+```
+
+Then run the follower with `--robot.port=/dev/serial0` (or leave
+`--robot.port` out: with no USB adapter plugged in, `/dev/serial0` is the
+default). The rest of the setup is the Ubuntu one, on Raspberry Pi OS
+64-bit: run the gamepad teleop from the Pi's desktop, not over bare SSH.
+The MuJoCo sim mirror is heavy for a Pi: run `kikobot-sim-server` on another
+machine and point the arm at it with `--robot.sim_host=<that machine's IP>`,
+or turn the mirror off with `--robot.sim_backend=none`.
+
+Power the servos from the HAT's DC input with the supply they need (12 V
+for the 12 V STS3215). The HAT also powers the Pi from it, so do not plug a
+second supply into the Pi. A sagging supply shows up as servos that stop
+answering.
+

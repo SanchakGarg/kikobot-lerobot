@@ -126,3 +126,16 @@ def test_a_dead_sim_server_never_holds_up_the_real_arm(arm):
     time.sleep(0.7)
     assert robot._sim.error is not None  # Noticed, in the background.
     robot.disconnect()
+
+
+def test_default_port_finds_pi_gpio_uart(monkeypatch):
+    """A Driver HAT on a Pi's GPIO UART is used when no USB adapter is plugged in."""
+    from lerobot_robot_kikobot import config
+
+    monkeypatch.setattr(config.os, "name", "posix")
+    monkeypatch.setattr(config.os.path, "exists", lambda p: p == "/dev/serial0")
+    assert config.default_port() == "/dev/serial0"
+    monkeypatch.setattr(config.os.path, "exists", lambda p: p in ("/dev/ttyACM0", "/dev/serial0"))
+    assert config.default_port() == "/dev/ttyACM0"
+    monkeypatch.setattr(config.os.path, "exists", lambda p: False)
+    assert config.default_port() == "/dev/ttyACM0"

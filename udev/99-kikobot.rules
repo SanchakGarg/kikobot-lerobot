@@ -6,10 +6,15 @@
 # Then replug the adapter and use --robot.port=/dev/kikobot.
 # Remove the lines for chips you do not have if another device uses them.
 
-# Feetech URT-1 / Waveshare bus servo adapter (CH343, enumerates as ttyACM*).
+# Feetech URT-1, Waveshare Bus Servo Adapter, Waveshare Bus Servo Driver HAT
+# with its jumper on A (all CH343, enumerate as ttyACM*).
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", MODE="0666", SYMLINK+="kikobot"
 # CH340 clones (ttyUSB*).
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", MODE="0666", SYMLINK+="kikobot"
 # FTDI adapters. Their 16 ms latency timer adds up to 16 ms to every position
 # read; drop it to 1 ms.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="0666", SYMLINK+="kikobot", RUN+="/bin/sh -c 'echo 1 > /sys/bus/usb-serial/devices/%k/latency_timer'"
+# Raspberry Pi + Waveshare Bus Servo Driver HAT with its jumper on B (GPIO
+# UART). No rule is needed: /dev/serial0 already points at it, and the plugin
+# finds it by default. See "Raspberry Pi + Waveshare Bus Servo Driver HAT" in
+# the README.
