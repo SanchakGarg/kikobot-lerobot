@@ -1,4 +1,4 @@
-"""Configs for the three LeRobot devices this plugin registers.
+"""Configs for the LeRobot devices this plugin registers, and for `kikobot-arm-server`.
 
 Every field is settable from the CLI, e.g. `--robot.max_velocity_deg_s=150`.
 """
@@ -12,7 +12,7 @@ from lerobot.cameras import CameraConfig
 from lerobot.robots import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
 
-from .protocol import ARM_JOINTS, DEFAULT_PORT  # noqa: F401 - ARM_JOINTS is re-exported
+from .protocol import ARM_DEFAULT_PORT, ARM_JOINTS, DEFAULT_PORT  # noqa: F401 - ARM_JOINTS is re-exported
 
 # The Isaac Sim server listens here by default, so both servers can run at once.
 ISAAC_DEFAULT_PORT = DEFAULT_PORT + 1
@@ -129,6 +129,34 @@ class KikobotFollowerConfig(RobotConfig):
         return self.sim_host, self.sim_port if self.sim_port is not None else default
     # During lerobot-calibrate, pose the sim server's arm the way each step asks for.
     calibration_view: bool = True
+
+
+@RobotConfig.register_subclass("kikobot_arm")
+@dataclass
+class KikobotArmConfig(KikobotSimConfig):
+    """The physical arm, served by `kikobot-arm-server` (start that first).
+
+    Same protocol as `kikobot_sim`, so the same teleop drives it. The arm's
+    own options (port, calibration, speed cap...) are the server's.
+    """
+
+    port: int = ARM_DEFAULT_PORT
+    # Cameras plugged into the arm's machine, by their --robot.cameras key on the server.
+    camera_names: tuple[str, ...] = ()
+    # Start from where the arm is: nothing to respawn on the real desk.
+    reset_on_connect: bool = False
+    timeout_s: float = 2.0
+    connect_timeout_s: float = 5.0
+
+
+@dataclass
+class ArmServerConfig:
+    """`kikobot-arm-server`: the arm's `kikobot_follower` options, and where to listen."""
+
+    robot: KikobotFollowerConfig = field(default_factory=KikobotFollowerConfig)
+    # 0.0.0.0 lets teleop and web nodes on other machines connect.
+    host: str = "127.0.0.1"
+    port: int = ARM_DEFAULT_PORT
 
 
 @TeleoperatorConfig.register_subclass("kikobot_gamepad")

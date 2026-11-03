@@ -738,16 +738,32 @@ class KikobotFollower(Robot):
         return present
 
     @check_if_not_connected
-    def get_observation(self) -> RobotObservation:
+    def read_state(self) -> dict[str, float]:
+        """Measured joints (`J1.pos`.. in degrees, `gripper.pos` in % open), no cameras."""
         self._require_torque()
         q = self._read_present()
-        obs: dict[str, Any] = {f"{j}.pos": float(np.rad2deg(q[i])) for i, j in enumerate(ARM_JOINTS)}
+        state = {f"{j}.pos": float(np.rad2deg(q[i])) for i, j in enumerate(ARM_JOINTS)}
         # No gripper servo: report the commanded opening so the key stays valid.
-        obs["gripper.pos"] = (
+        state["gripper.pos"] = (
             self._gripper_pct(q[6]) if self.config.gripper_id is not None else self._last_gripper_pct
         )
-        for key, cam in self.cameras.items():
-            obs[key] = cam.read_latest() if hasattr(cam, "read_latest") else cam.async_read()
+        return state
+
+    def joint_limits_deg(self) -> tuple[list[float], list[float]]:
+        """J1..J6 limits the arm accepts goals within, in degrees."""
+        lower, upper = self._reachable()
+        n = len(ARM_JOINTS)
+        return np.rad2deg(lower[:n]).tolist(), np.rad2deg(upper[:n]).tolist()
+
+    def read_camera(self, key: str) -> np.ndarray:
+        cam = self.cameras[key]
+        return cam.read_latest() if hasattr(cam, "read_latest") else cam.async_read()
+
+    @check_if_not_connected
+    def get_observation(self) -> RobotObservation:
+        obs: dict[str, Any] = self.read_state()
+        for key in self.cameras:
+            obs[key] = self.read_camera(key)
         return obs
 
     @check_if_not_connected

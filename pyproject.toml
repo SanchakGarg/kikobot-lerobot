@@ -39,9 +39,14 @@ openvla = [
 [project.scripts]
 kikobot-sim-server = "lerobot_robot_kikobot.sim_server:main"
 kikobot-datagen = "lerobot_robot_kikobot.datagen.cli:main"
+kikobot-arm-server = "lerobot_robot_kikobot.arm_server:main"
+kikobot-servo-web = "lerobot_robot_kikobot.servo_web:main"
 
 [tool.setuptools.packages.find]
 include = ["lerobot_robot_kikobot*"]
+
+[tool.setuptools.package-data]
+lerobot_robot_kikobot = ["web/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

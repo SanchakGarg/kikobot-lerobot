@@ -16,6 +16,15 @@ Requests (client -> server), all with a "cmd" key:
     reset    {ready_deg: [6]}              -> {state}    arm to ready, scene re-randomized
     close    {}                            -> {}
 
+The real arm's server (`arm_server.py`, `kikobot-arm-server`) speaks it too,
+so a teleop drives the physical arm the way it drives a sim (`kikobot_arm`).
+There `pose` moves like `command` (nothing teleports), `reset` leaves the arm
+where it is, and two more requests read and set the servos' limits
+(`servo_limits.py`), for `kikobot-servo-web`:
+
+    limits        {}                              -> {servos, registers, values: {servos: [...]}}
+    limits_write  {servo, key, value}             -> {id, key, value}   value read back, raw
+
 The MuJoCo server (`sim_server.py`) and the Isaac Sim server
 (`isaac/kikobot_isaac_server.py`) both speak it, so `kikobot_sim`,
 `kikobot_isaac` and the real arm's mirror share one client (`sim_client.py`).
@@ -39,6 +48,8 @@ PROTOCOL_VERSION = 2
 # The arm's joints, in the order every message and action uses.
 ARM_JOINTS = ("J1", "J2", "J3", "J4", "J5", "J6")
 DEFAULT_PORT = 5556
+# The real arm's server (kikobot-arm-server); 5557 is the Isaac server's.
+ARM_DEFAULT_PORT = DEFAULT_PORT + 2
 IMAGE_ENCODINGS = ("raw", "jpeg")
 JPEG_QUALITY = 90
 

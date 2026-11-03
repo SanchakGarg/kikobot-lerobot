@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kiko-Bot Servo Limits</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --ink: #1b1f24; --muted: #667080; --line: #dde1e6;
+    --accent: #2563eb; --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --pending: #fef3c7;
+    --bar: #93c5fd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111418; --panel: #1a1f25; --ink: #e6e9ed; --muted: #8b95a3; --line: #2c333c;
+      --accent: #60a5fa; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --pending: #3b2f12;
+      --bar: #1e40af;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 14px 16px;
+           border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+  h1 { font-size: 17px; margin: 0; margin-right: auto; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 8px; }
+  main { padding: 16px; max-width: 1200px; margin: 0 auto; display: grid; gap: 20px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { font-weight: 600; color: var(--muted); font-size: 12px; }
+  .reg { white-space: normal; min-width: 180px; }
+  .reg small { display: block; color: var(--muted); }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
+  .pill.ok { color: var(--ok); } .pill.bad { color: var(--bad); }
+  input[type=number] { width: 96px; padding: 4px 6px; text-align: right; font: inherit;
+                       background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; }
+  input.pending { background: var(--pending); border-color: var(--warn); }
+  input.bad { border-color: var(--bad); }
+  button { font: inherit; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  label.toggle { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+  .load { position: relative; min-width: 110px; }
+  .load span { position: relative; z-index: 1; }
+  .load i { position: absolute; top: 5px; bottom: 5px; right: 8px; background: var(--bar); border-radius: 2px; opacity: .6; }
+  .flag { color: var(--bad); font-weight: 600; margin-left: 4px; }
+  .muted { color: var(--muted); }
+  .err { color: var(--bad); white-space: normal; text-align: left; }
+  #msg { min-height: 1.4em; }
+  #msg.bad { color: var(--bad); } #msg.ok { color: var(--ok); }
+  .setall { display: flex; gap: 4px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kiko-Bot servo limits</h1>
+  <span id="conn" class="pill">connecting…</span>
+  <label class="toggle"><input type="checkbox" id="live" checked> live (1 s)</label>
+  <button id="refresh">Refresh</button>
+  <button id="apply" class="primary" disabled>Apply changes</button>
+</header>
+<main>
+  <div id="msg"></div>
+  <section>
+    <h2>Live</h2>
+    <div class="scroll"><table id="liveT"></table></div>
+  </section>
+  <section>
+    <h2>Limits</h2>
+    <p class="muted" style="margin:0 0 8px">Edit a value (in the units shown) and press Apply, or use
+      “All” to set every servo at once. EEPROM limits survive power-off; the live torque limit does not.</p>
+    <div class="scroll"><table id="limT"></table></div>
+  </section>
+  <section>
+    <h2>Other settings (read-only)</h2>
+    <div class="scroll"><table id="infoT"></table></div>
+  </section>
+</main>
+<script>
+const FLAGS = [[1, "volt"], [2, "angle"], [4, "temp"], [8, "current"], [32, "overload"]];
+let spec = null, values = {}, pending = new Map(); // "servo|key" -> raw
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === "class" ? (e.className = v) : (e[k] = v);
+  e.append(...kids);
+  return e;
+};
+const fmt = (reg, raw) => {
+  const v = raw * reg.scale;
+  return Number.isInteger(reg.scale) ? String(v) : v.toFixed(reg.scale < 0.5 ? 1 : 0);
+};
+const toRaw = (reg, text) => Math.round(parseFloat(text) / reg.scale);
+const rangeText = (r) => `${fmt(r, r.lo)}–${fmt(r, r.hi)} ${r.unit}`;
+
+function msg(text, kind = "") { $("msg").textContent = text; $("msg").className = kind; }
+
+async function load() {
+  try {
+    const res = await fetch("/api/limits");
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error);
+    const first = !spec;
+    spec = body;
+    values = Object.fromEntries(body.values.servos.map((s) => [s.name, s]));
+    $("conn").textContent = "connected"; $("conn").className = "pill ok";
+    if (first) build();
+    update();
+  } catch (e) {
+    $("conn").textContent = "no arm: " + e.message; $("conn").className = "pill bad";
+  }
+}
+
+function build() {
+  const servos = spec.servos;
+  const regs = (g) => spec.registers.filter((r) => r.group === g);
+  // Live.
+  const lt = $("liveT"); lt.replaceChildren();
+  const live = regs("live");
+  lt.append(el("thead", {}, el("tr", {}, el("th", {}, "Servo"), ...live.map((r) => el("th", {}, `${r.label}${r.unit ? " (" + r.unit + ")" : ""}`)))));
+  const lb = el("tbody"); lt.append(lb);
+  for (const s of servos) {
+    const tr = el("tr", { id: `live-${s.name}` }, el("td", {}, `${s.name} `, el("span", { class: "muted" }, `#${s.id}`)));
+    for (const r of live) tr.append(el("td", { class: r.key === "load" ? "load" : "", title: r.help }));
+    lb.append(tr);
+  }
+  // Limits: one row per register, one column per servo.
+  const mt = $("limT"); mt.replaceChildren();
+  mt.append(el("thead", {}, el("tr", {}, el("th", {}, "Limit"), ...servos.map((s) => el("th", {}, s.name)), el("th", {}, "All"))));
+  const mb = el("tbody"); mt.append(mb);
+  for (const r of regs("limit")) {
+    const tr = el("tr", {}, el("td", { class: "reg", title: r.help },
+      `${r.label} `, el("small", {}, `${rangeText(r)}${r.eeprom ? " · EEPROM" : " · live"} — ${r.help}`)));
+    for (const s of servos) {
+      const inp = el("input", { type: "number", step: r.scale, min: r.lo * r.scale, max: r.hi * r.scale, id: `in-${s.name}-${r.key}` });
+      inp.addEventListener("input", () => stage(s.name, r, inp));
+      inp.addEventListener("keydown", (e) => e.key === "Enter" && apply());
+      tr.append(el("td", {}, inp));
+    }
+    const all = el("input", { type: "number", step: r.scale, min: r.lo * r.scale, max: r.hi * r.scale, placeholder: "all" });
+    const btn = el("button", { textContent: "Set all" });
+    btn.addEventListener("click", () => {
+      if (all.value === "") return;
+      for (const s of servos) {
+        const inp = $(`in-${s.name}-${r.key}`);
+        inp.value = all.value; stage(s.name, r, inp);
+      }
+      apply();
+    });
+    tr.append(el("td", {}, el("div", { class: "setall" }, all, btn)));
+    mb.append(tr);
+  }
+  // Info.
+  const it = $("infoT"); it.replaceChildren();
+  it.append(el("thead", {}, el("tr", {}, el("th", {}, "Setting"), ...servos.map((s) => el("th", {}, s.name)))));
+  const ib = el("tbody"); it.append(ib);
+  for (const r of regs("info")) {
+    const tr = el("tr", {}, el("td", { class: "reg", title: r.help }, r.label, el("small", {}, r.help)));
+    for (const s of servos) tr.append(el("td", { id: `info-${s.name}-${r.key}` }));
+    ib.append(tr);
+  }
+}
+
+function stage(servo, reg, inp) {
+  const k = `${servo}|${reg.key}`;
+  const raw = toRaw(reg, inp.value);
+  const cur = values[servo]?.values?.[reg.key];
+  const valid = inp.value !== "" && Number.isFinite(raw) && raw >= reg.lo && raw <= reg.hi;
+  inp.classList.toggle("bad", inp.value !== "" && !valid);
+  if (valid && raw !== cur) { pending.set(k, raw); inp.classList.add("pending"); }
+  else { pending.delete(k); inp.classList.remove("pending"); }
+  $("apply").disabled = pending.size === 0;
+  $("apply").textContent = pending.size ? `Apply ${pending.size} change${pending.size > 1 ? "s" : ""}` : "Apply changes";
+}
+
+function update() {
+  for (const s of spec.servos) {
+    const v = values[s.name] || {};
+    const row = $(`live-${s.name}`);
+    const cells = [...row.children].slice(1);
+    if (v.error) {
+      cells.forEach((c, i) => { c.textContent = i === 0 ? v.error : ""; c.className = i === 0 ? "err" : ""; });
+      continue;
+    }
+    spec.registers.filter((r) => r.group === "live").forEach((r, i) => {
+      const c = cells[i], raw = v.values[r.key];
+      if (r.key === "status") {
+        const on = FLAGS.filter(([b]) => raw & b).map(([, n]) => n);
+        c.replaceChildren(on.length ? el("span", { class: "flag" }, on.join(", ")) : el("span", { class: "muted" }, "ok"));
+      } else if (r.key === "load") {
+        const pct = Math.min(100, Math.abs(raw * r.scale));
+        const bar = el("i");
+        bar.style.width = `${pct * 0.9}%`;
+        c.replaceChildren(bar, el("span", {}, fmt(r, raw)));
+      } else c.textContent = fmt(r, raw);
+    });
+    for (const r of spec.registers.filter((r) => r.group === "limit")) {
+      const inp = $(`in-${s.name}-${r.key}`);
+      if (document.activeElement !== inp && !pending.has(`${s.name}|${r.key}`)) {
+        inp.value = fmt(r, v.values[r.key]);
+        inp.classList.remove("bad");
+      }
+    }
+    for (const r of spec.registers.filter((r) => r.group === "info")) {
+      const raw = v.values[r.key];
+      $(`info-${s.name}-${r.key}`).textContent = r.key === "unloading" ? `0x${raw.toString(16).padStart(2, "0")}` : `${raw}`;
+    }
+  }
+}
+
+async function apply() {
+  if (!pending.size) return;
+  $("apply").disabled = true;
+  const byKey = Object.fromEntries(spec.registers.map((r) => [r.key, r]));
+  const failed = [];
+  let done = 0;
+  for (const [k, raw] of [...pending]) {
+    const [servo, key] = k.split("|");
+    try {
+      const res = await fetch("/api/limits", { method: "POST", headers: { "Content-Type": "application/json" },
+                                               body: JSON.stringify({ servo, key, value: raw }) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      pending.delete(k); done++;
+      $(`in-${servo}-${key}`).classList.remove("pending");
+    } catch (e) {
+      failed.push(`${servo} ${byKey[key].label}: ${e.message}`);
+    }
+  }
+  if (failed.length) msg(failed.join(" · "), "bad");
+  else msg(`Set ${done} value${done === 1 ? "" : "s"}.`, "ok");
+  $("apply").textContent = pending.size ? `Apply ${pending.size} changes` : "Apply changes";
+  $("apply").disabled = pending.size === 0;
+  await load();
+}
+
+$("apply").addEventListener("click", apply);
+$("refresh").addEventListener("click", load);
+let busy = false;
+setInterval(async () => {
+  if (!$("live").checked || busy) return;
+  busy = true; try { await load(); } finally { busy = false; }
+}, 1000);
+load();
+</script>
+</body>
+</html>

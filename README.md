@@ -11,6 +11,7 @@ one of them, so the simulated arm moves with it:
 | `--robot.type=kikobot_sim` | The arm in `kikobot-sim-server` (MuJoCo, optionally Newton physics) |
 | `--robot.type=kikobot_isaac` | The arm in the Isaac Sim server, Newton physics and RTX cameras ([docs/](docs/README.md)) |
 | `--robot.type=kikobot_follower` | The physical arm on Feetech STS servos, mirrored into a sim |
+| `--robot.type=kikobot_arm` | The physical arm through `kikobot-arm-server`, the real arm's own server ([6a](#6a-the-arm-server)) |
 | `--teleop.type=kikobot_gamepad` | 6-DOF gamepad control: full IK over all six joints |
 
 **Isaac Sim, and training on a SLURM cluster:** see [docs/](docs/README.md).
@@ -33,6 +34,7 @@ trained on it, runs on the other.
 4. [Gamepad controls](#4-gamepad-controls)
 5. [The sim server](#5-the-sim-server)
 6. [Drive the real arm](#6-drive-the-real-arm)
+   - 6a. [The arm server, and the servo limits page](#6a-the-arm-server)
 7. [Speed and smoothness](#7-speed-and-smoothness)
 8. [Record a dataset](#8-record-a-dataset)
 9. [Platform notes](#9-platform-notes)
@@ -208,6 +210,9 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
   it go limp.
 - If a joint turns the wrong way or does not line up with the sim,
   calibrate again ([calibration](#calibration)).
+- To check or change the servos' current and torque limits while you
+  drive, run the arm as a server instead and open the limits page:
+  [6a](#6a-the-arm-server).
 
 ---
 
@@ -224,7 +229,9 @@ Latency Timer to 1 ms. To check the controller, open `joy.cpl` (Win + R).
 | `lerobot_robot_kikobot/protocol.py`, `sim_client.py` | The ZMQ messages both sim servers speak, and the client for them. |
 | `lerobot_robot_kikobot/motion.py` | The speed cap and the droop (sag) correction. |
 | `lerobot_robot_kikobot/feetech.py` | Sync read/write over the Feetech bus. |
-| `lerobot_robot_kikobot/sim.py`, `isaac.py`, `follower.py`, `gamepad.py` | The four LeRobot devices. |
+| `lerobot_robot_kikobot/sim.py`, `isaac.py`, `follower.py`, `arm.py`, `gamepad.py` | The five LeRobot devices. |
+| `lerobot_robot_kikobot/arm_server.py` | `kikobot-arm-server`: the real arm behind the sim servers' protocol. |
+| `lerobot_robot_kikobot/servo_limits.py`, `servo_web.py`, `web/` | The servos' current, torque and safety limits, and `kikobot-servo-web`, the page that shows and sets them. |
 | `lerobot_robot_kikobot/desk/` | The desk sorting station, shared by the sims: stations, item pool and sampler, meshes, textures, and its MuJoCo builder. |
 | `lerobot_robot_kikobot/datagen/` | `kikobot-datagen`: the desk tasks, the scripted expert, its perfection checks, the recorder and the RLDS export for OpenVLA. |
 | `isaac/` | Run with Isaac Sim's Python: the Isaac sim server (Newton) and the MJCF → USD converter. |
@@ -298,7 +305,7 @@ register_third_party_plugins()
 print(sorted(c for c in RobotConfig.get_known_choices() if 'kikobot' in c))"
 ```
 
-It must print `['kikobot_follower', 'kikobot_isaac', 'kikobot_sim']`.
+It must print `['kikobot_arm', 'kikobot_follower', 'kikobot_isaac', 'kikobot_sim']`.
 
 **Run the tests** (optional, no hardware): `$V/pip install pytest && $V/python -m pytest`.
 
@@ -661,6 +668,113 @@ Follower options (`--robot.<name>=`):
 | `sim_timeout_s` | `0.5` | Longest wait for a sim server reply, in the mirror's own thread: the real arm never waits for the sim |
 | `calibration_view` | `true` | Pose the sim server's arm during calibration to show the pose to match |
 
+<a id="6a-the-arm-server"></a>
+
+### 6a. The arm server, and the servo limits page
+
+`kikobot_follower` opens the servo bus inside `lerobot-teleoperate`, so
+nothing else can reach the servos while it runs. `kikobot-arm-server` runs the
+real arm as its own node instead, the way `kikobot-sim-server` runs the sim:
+it opens the bus, holds the arm where it is, and serves the sim protocol on
+port **5558**. Then any number of nodes connect to it:
+
+- **the gamepad teleop** (or `lerobot-record`, or a policy) with
+  `--robot.type=kikobot_arm`, exactly as with `kikobot_sim`;
+- **`kikobot-servo-web`**, a web page that shows each servo's live load,
+  current, voltage, temperature and protection flags, shows every current,
+  torque and safety limit with the range it accepts, and sets them, on one
+  servo or all at once, while the arm is being driven.
+
+The server puts one request at a time on the bus, so a limits read never
+collides with a goal. Between requests the servos hold the last goal: if the
+teleop stops or drops, the arm stays where it is.
+
+Terminal 1, the arm server (leave it running). It takes every
+`kikobot_follower` option from the table above as `--robot.<name>=`:
+
+```bash
+$V/kikobot-arm-server --robot.port=/dev/ttyACM0 --robot.id=kikobot
+```
+
+Terminal 2, the gamepad:
+
+```bash
+$V/lerobot-teleoperate --robot.type=kikobot_arm \
+  --teleop.type=kikobot_gamepad --fps=60
+```
+
+Terminal 3, the limits page, then open <http://127.0.0.1:8080>:
+
+```bash
+$V/kikobot-servo-web
+```
+
+On Windows: `& "$V\kikobot-arm-server.exe" --robot.port=COM3 --robot.id=kikobot`,
+`& "$V\lerobot-teleoperate.exe" --robot.type=kikobot_arm --teleop.type=kikobot_gamepad --fps=60`
+and `& "$V\kikobot-servo-web.exe"`.
+
+The sim mirror still works: start `kikobot-sim-server` first and the arm
+server mirrors every goal into it, as `kikobot_follower` does.
+
+**Nodes on other machines.** Both servers listen on `127.0.0.1` only, by
+default. To drive the arm or open the page from another machine (for
+example the arm on a Raspberry Pi, the gamepad on a laptop):
+
+```bash
+# On the arm's machine:
+$V/kikobot-arm-server --robot.port=/dev/serial0 --robot.id=kikobot --host=0.0.0.0
+$V/kikobot-servo-web --host 0.0.0.0          # page at http://<arm machine's IP>:8080
+# On the laptop:
+$V/lerobot-teleoperate --robot.type=kikobot_arm --robot.host=<arm machine's IP> \
+  --teleop.type=kikobot_gamepad --teleop.robot_id=kikobot --fps=60
+# Or the page on the laptop, talking to the arm server over the network:
+$V/kikobot-servo-web --arm-host <arm machine's IP>
+```
+
+Anyone who can reach these ports can move the arm and change its limits:
+open them only on a network you trust. The gamepad's home pose (Y) is read
+from the teleop machine's calibration folder; copy `kikobot_home.json` from
+the arm's machine
+(`~/.cache/huggingface/lerobot/calibration/robots/kikobot_follower/`) to
+use the same home on the laptop.
+
+**Without the arm server.** With nothing else holding the bus, the page can
+open it itself: `$V/kikobot-servo-web --bus /dev/ttyACM0` (`--ids 1,2,3,4,5,6,7`
+for other bus IDs). Do not do this while `kikobot_follower` or the arm server
+runs: two programs on one serial port garble each other's packets.
+
+**The limits.** Values are shown in units and sent raw; the page enforces
+each one's range.
+
+| Limit | Range | Stored | What it does |
+|---|---|---|---|
+| Torque limit (live) | 0–100 % | RAM | The torque cap in force now. Applies at once; back to Max torque at power-up |
+| Max torque | 0–100 % | EEPROM | Torque cap loaded at power-up |
+| Protection current | 0–3322 mA (6.5 mA steps) | EEPROM | Current above which over-current protection starts timing |
+| Over-current time | 0–2540 ms | EEPROM | How long the current may stay above it before torque is cut |
+| Overload torque | 0–100 % | EEPROM | Load above which overload protection starts timing |
+| Overload time | 0–2540 ms | EEPROM | How long the load may stay above it before protection trips |
+| Protective torque | 0–100 % | EEPROM | Torque left once overload protection has tripped |
+| Max temperature | 0–100 °C | EEPROM | Over-temperature threshold |
+| Max / Min voltage | 0–25.4 V | EEPROM | Over- and under-voltage thresholds |
+
+The servo's own angle limits and its protection mask are shown but read-only:
+calibration relies on the angle limits. Every write is read back, and the
+page says so if a servo kept its old value. To try a lower torque safely,
+change **Torque limit (live)** first: a power cycle undoes it. Set **Max
+torque** once you are happy with it. A joint with too little torque sags or
+stalls under the arm's weight, J2 first.
+
+Arm server options: `--host` (`127.0.0.1`), `--port` (`5558`), and every
+`--robot.<name>=` above. `kikobot_arm` options: those of `kikobot_sim`
+([5](#5-the-sim-server)), with `port` `5558`, `camera_names` `[]` (keys of
+the server's `--robot.cameras`) and `reset_on_connect` `false`. As with
+`kikobot_follower`, the gamepad's Back button respawns nothing on the real
+arm; it only sends it home under the speed cap. `kikobot-servo-web` options:
+`--host` / `--port` (`127.0.0.1` / `8080`) for the page, `--arm-host` /
+`--arm-port` (`127.0.0.1` / `5558`) for the arm server, or `--bus` / `--ids`
+/ `--baudrate` to open the bus itself.
+
 ---
 
 ## 7. Speed and smoothness
@@ -726,53 +840,6 @@ jobs: [docs/datagen-openvla.md](docs/datagen-openvla.md).
 The sim server paces physics with ZMQ polls and `time.perf_counter`, accurate
 to about 1 ms on all three.
 
----
-
-## 10. Troubleshooting
-
-| Problem | Fix |
-|---|---|
-| `kikobot_*` is not a valid type | The plugin failed to import, or the old KikoBot plugin with the same name is installed. Run the check in [3](#3-install). |
-| `Could not open /dev/ttyACM0` | Wrong port (`lerobot-find-port`), or not in `dialout` (log out and in after `usermod`). `/dev/serial0` on a Pi: the serial port is off or the serial console holds it ([Driver HAT](#pi-hat)). |
-| `There is no status packet!` | A servo stopped replying after answering the ping. Transactions are retried and sync read falls back to single reads automatically; if it persists, the full error names the servo: check its cable and the supply (a sagging 12 V drops replies). Waveshare adapter, or Driver HAT on USB: jumper on **A**; Driver HAT on the Pi's GPIO: jumper on **B**, and on a Pi 3/4 the `disable-bt` overlay ([Driver HAT](#pi-hat)). |
-| `No sim server at tcp://127.0.0.1:5556` | Start `kikobot-sim-server` first (or the Isaac server with `--robot.sim_backend=isaac`). The real arm runs without it; `--robot.sim_backend=none` silences the warning. |
-| `No reply from the sim server` (kikobot_sim / kikobot_isaac) | The server is not running, or is on another port: check `--robot.port`. |
-| No rerun window opens with `--display_data=true` | `rerun-sdk` comes with LeRobot's `core_scripts` extra; otherwise `pip install rerun-sdk`. |
-| The connection drops during calibration | Calibration is the only time every joint reaches its ends, which pulls the daisy-chained servo cables tight: a half-seated connector drops that servo and every one after it. Reseat the cables, leave slack at each joint (J6 turns ±175°), move joints slowly, and press Enter to retry at the prompt. If it is the USB adapter that drops (the port vanishes), on Ubuntu turn off USB autosuspend: `echo -1 \| sudo tee /sys/module/usbcore/parameters/autosuspend`. |
-| `Servos [...] did not answer` | The bus has no 12 V, a cable is loose, or `--robot.servo_ids` is wrong. `[7]` alone: no gripper servo on the bus; pass `--robot.gripper_id=null`. |
-| `glfw.init() failed` | No desktop session (e.g. bare SSH on Ubuntu). Run from the desktop. |
-| `No gamepad found` | Plug the controller in, then restart (it is only detected at startup). The log lists every joystick GLFW sees; on Ubuntu, if none appear, run `sudo usermod -aG input $USER` and log in again. Xbox pads unknown to GLFW get the xpad layout automatically. |
-| Wrong device used as the gamepad | Pick its slot from the `Joystick slot N` log lines: `--teleop.joystick=N`. |
-| `Settings schema 'org.gnome.settings-daemon.plugins.xsettings' does not contain a key named 'antialiasing'` (Ubuntu) | Launched from a Snap app's terminal (e.g. Snap VS Code). Run from a normal terminal, or install VS Code from the `.deb`. |
-| Gamepad moves come out in the wrong directions (e.g. X/Y moves the arm up and down) | One or more joints are calibrated the wrong way round. Run calibrate, type `check`, and compare with the sim's ready pose ([check the directions](#check-directions)); `flip` each joint with the wrong sign. |
-| A joint moves the wrong way (opposite to the sim) | Compare the real arm with the sim window, or with `--display_data=true` (a joint's measured line moves opposite to its commanded line). Calibrated: calibrate and type `flip <joint>` ([flip a joint](#flip-joint)). Uncalibrated: list it in `--robot.inverted_joints` (default `[J5]`), e.g. `'[J5,J3]'` ([6](#joint-direction)). |
-| Real arm stops short of, or overshoots, the sim's pose | Redo [calibration](#calibration) with each joint pushed fully to the ends the model shows. |
-| Arm wobbles after stopping | Lower the teleop speeds or `--teleop.stop_rate_per_s` ([7](#7-speed-and-smoothness)). |
-| Real arm lags behind the sim | Run teleop at `--fps=60`; check the servos got P = 16 (the log at connect); a loaded joint lags most, see [sag](#sag). |
-| J2 (or another joint) hangs lower than the sim | Droop under load: corrected for `--robot.sag_joints` (default `[J2]`) while the arm holds still ([sag](#sag)). Add others, e.g. `'[J2,J3]'`. |
-| A joint sits off the sim by the same amount everywhere, even after calibration | Its stops are not symmetric about its zero: calibrate and type `zero <joint>` ([re-zero a joint](#zero-joint)). |
-| A tiny stick nudge makes the arm jump, then creep the rest of the way | Stick-slip in the servo: with a soft position gain, a slowly creeping goal does not move the servo until the gear friction gives, then it jumps, and the soft gain makes the last bit slow. Raise the gain: `--robot.p_coefficient=24` (try 32; lower it again if a joint buzzes). Releasing the stick stops the motion within `--teleop.stop_rate_per_s`. |
-| Servo buzzes while holding | Lower `--robot.p_coefficient` (try 12). |
-| `25 position reads in a row failed` | The bus failed repeatedly: check power and cable. The log has the cause. |
-
----
-
-## 11. Commit messages
-
-One line: a lowercase type, a colon, then a short summary of what changed.
-
-| Type | For |
-|---|---|
-| `feat:` | New behaviour |
-| `fix:` | A bug fix |
-| `add:` | New files or assets (models, scenes, rules) |
-| `update:` | Changes to existing assets or settings |
-| `docs:` | README and comments only |
-| `refactor:` | Restructuring with no change in behaviour |
-| `test:` | Tests only |
-| `chore:` | Tooling, ignores, housekeeping |
-
-Example: `feat: write servo goals straight to the bus like the SO-101`
 <a id="pi-hat"></a>
 
 ### Raspberry Pi + Waveshare Bus Servo Driver HAT
@@ -815,3 +882,53 @@ for the 12 V STS3215). The HAT also powers the Pi from it, so do not plug a
 second supply into the Pi. A sagging supply shows up as servos that stop
 answering.
 
+---
+
+## 10. Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `kikobot_*` is not a valid type | The plugin failed to import, or the old KikoBot plugin with the same name is installed. Run the check in [3](#3-install). |
+| `Could not open /dev/ttyACM0` | Wrong port (`lerobot-find-port`), or not in `dialout` (log out and in after `usermod`). `/dev/serial0` on a Pi: the serial port is off or the serial console holds it ([Driver HAT](#pi-hat)). |
+| `There is no status packet!` | A servo stopped replying after answering the ping. Transactions are retried and sync read falls back to single reads automatically; if it persists, the full error names the servo: check its cable and the supply (a sagging 12 V drops replies). Waveshare adapter, or Driver HAT on USB: jumper on **A**; Driver HAT on the Pi's GPIO: jumper on **B**, and on a Pi 3/4 the `disable-bt` overlay ([Driver HAT](#pi-hat)). |
+| `No sim server at tcp://127.0.0.1:5556` | Start `kikobot-sim-server` first (or the Isaac server with `--robot.sim_backend=isaac`). The real arm runs without it; `--robot.sim_backend=none` silences the warning. |
+| `No reply from the sim server` (kikobot_sim / kikobot_isaac) | The server is not running, or is on another port: check `--robot.port`. |
+| `No reply from the sim server at tcp://…:5558` (kikobot_arm) | Start `kikobot-arm-server` first. On another machine: `--host=0.0.0.0` on the server, `--robot.host=<its IP>` on the teleop. |
+| Limits page says `no arm` | `kikobot-arm-server` is not running, or is elsewhere: `kikobot-servo-web --arm-host <IP>`. |
+| A limit does not change ("kept … at …") | That servo's firmware refused the write. Some only take EEPROM writes with torque off: stop the arm server and use `kikobot-servo-web --bus <port>`. |
+| No rerun window opens with `--display_data=true` | `rerun-sdk` comes with LeRobot's `core_scripts` extra; otherwise `pip install rerun-sdk`. |
+| The connection drops during calibration | Calibration is the only time every joint reaches its ends, which pulls the daisy-chained servo cables tight: a half-seated connector drops that servo and every one after it. Reseat the cables, leave slack at each joint (J6 turns ±175°), move joints slowly, and press Enter to retry at the prompt. If it is the USB adapter that drops (the port vanishes), on Ubuntu turn off USB autosuspend: `echo -1 \| sudo tee /sys/module/usbcore/parameters/autosuspend`. |
+| `Servos [...] did not answer` | The bus has no 12 V, a cable is loose, or `--robot.servo_ids` is wrong. `[7]` alone: no gripper servo on the bus; pass `--robot.gripper_id=null`. |
+| `glfw.init() failed` | No desktop session (e.g. bare SSH on Ubuntu). Run from the desktop. |
+| `No gamepad found` | Plug the controller in, then restart (it is only detected at startup). The log lists every joystick GLFW sees; on Ubuntu, if none appear, run `sudo usermod -aG input $USER` and log in again. Xbox pads unknown to GLFW get the xpad layout automatically. |
+| Wrong device used as the gamepad | Pick its slot from the `Joystick slot N` log lines: `--teleop.joystick=N`. |
+| `Settings schema 'org.gnome.settings-daemon.plugins.xsettings' does not contain a key named 'antialiasing'` (Ubuntu) | Launched from a Snap app's terminal (e.g. Snap VS Code). Run from a normal terminal, or install VS Code from the `.deb`. |
+| Gamepad moves come out in the wrong directions (e.g. X/Y moves the arm up and down) | One or more joints are calibrated the wrong way round. Run calibrate, type `check`, and compare with the sim's ready pose ([check the directions](#check-directions)); `flip` each joint with the wrong sign. |
+| A joint moves the wrong way (opposite to the sim) | Compare the real arm with the sim window, or with `--display_data=true` (a joint's measured line moves opposite to its commanded line). Calibrated: calibrate and type `flip <joint>` ([flip a joint](#flip-joint)). Uncalibrated: list it in `--robot.inverted_joints` (default `[J5]`), e.g. `'[J5,J3]'` ([6](#joint-direction)). |
+| Real arm stops short of, or overshoots, the sim's pose | Redo [calibration](#calibration) with each joint pushed fully to the ends the model shows. |
+| Arm wobbles after stopping | Lower the teleop speeds or `--teleop.stop_rate_per_s` ([7](#7-speed-and-smoothness)). |
+| Real arm lags behind the sim | Run teleop at `--fps=60`; check the servos got P = 16 (the log at connect); a loaded joint lags most, see [sag](#sag). |
+| J2 (or another joint) hangs lower than the sim | Droop under load: corrected for `--robot.sag_joints` (default `[J2]`) while the arm holds still ([sag](#sag)). Add others, e.g. `'[J2,J3]'`. |
+| A joint sits off the sim by the same amount everywhere, even after calibration | Its stops are not symmetric about its zero: calibrate and type `zero <joint>` ([re-zero a joint](#zero-joint)). |
+| A tiny stick nudge makes the arm jump, then creep the rest of the way | Stick-slip in the servo: with a soft position gain, a slowly creeping goal does not move the servo until the gear friction gives, then it jumps, and the soft gain makes the last bit slow. Raise the gain: `--robot.p_coefficient=24` (try 32; lower it again if a joint buzzes). Releasing the stick stops the motion within `--teleop.stop_rate_per_s`. |
+| Servo buzzes while holding | Lower `--robot.p_coefficient` (try 12). |
+| `25 position reads in a row failed` | The bus failed repeatedly: check power and cable. The log has the cause. |
+
+---
+
+## 11. Commit messages
+
+One line: a lowercase type, a colon, then a short summary of what changed.
+
+| Type | For |
+|---|---|
+| `feat:` | New behaviour |
+| `fix:` | A bug fix |
+| `add:` | New files or assets (models, scenes, rules) |
+| `update:` | Changes to existing assets or settings |
+| `docs:` | README and comments only |
+| `refactor:` | Restructuring with no change in behaviour |
+| `test:` | Tests only |
+| `chore:` | Tooling, ignores, housekeeping |
+
+Example: `feat: write servo goals straight to the bus like the SO-101`

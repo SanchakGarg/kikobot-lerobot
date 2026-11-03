@@ -115,6 +115,24 @@ class FeetechBus:
         result, error = self._txrx(self.packet.write2ByteTxRx, servo_id, address, value)
         self._check(result, error, f"write servo {servo_id} @{address}")
 
+    def read_block(self, servo_id: int, address: int, length: int) -> list[int]:
+        """`length` consecutive register bytes in one transaction."""
+        data, result, error = self._txrx(self.packet.readTxRx, servo_id, address, length)
+        self._check(result, error, f"read servo {servo_id} @{address}+{length}")
+        return list(data)
+
+    def write_register(self, servo_id: int, address: int, size: int, value: int, eeprom: bool) -> None:
+        """Write a 1- or 2-byte register; EEPROM ones with the lock opened around it."""
+        write = self.write_byte if size == 1 else self.write_word
+        if not eeprom:
+            write(servo_id, address, value)
+            return
+        self.write_byte(servo_id, ADDR_LOCK, 0)
+        try:
+            write(servo_id, address, value)
+        finally:
+            self.write_byte(servo_id, ADDR_LOCK, 1)
+
     def set_eeprom_byte(self, servo_id: int, address: int, value: int) -> None:
         """Write an EEPROM register only if it differs, to spare the flash."""
         if self.read_byte(servo_id, address) == value:
