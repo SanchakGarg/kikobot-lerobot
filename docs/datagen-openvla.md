@@ -56,9 +56,9 @@ and the reason is counted in `stats.json`.
 - **The plan holds**, before any physics runs:
   - every tick of every straight move is within 1.5 mm and 1.5° of its target
   - no joint jumps more than 3 rad/s between ticks, and none comes within 2° of a limit
-  - the whole motion, with the carried item, is checked in a kinematic copy of the scene: no arm against a station, the table or another item, and no carried item against anything before it is let go
+  - the whole motion, with the carried item, is checked in a kinematic copy of the scene: no arm against a station, the desk or another item, and no carried item against anything before it is let go
 - **In the physics:**
-  - the arm never touches a station, another item or the table; only the fingertips may brush the desk while grasping
+  - the arm never touches a station, another item or the desk; only the fingertips may brush the desk while grasping
   - the item comes up with the jaws
   - it never slips more than 15 mm in them between the lift and the release
 - **At the end**, after the arm has gone home and 1 s of settling:
@@ -97,17 +97,17 @@ re-export, are `<out>/raw/<task>/episode_XXXXX.npz`, with `stats.json` beside th
 
 | Key | Shape | |
 |---|---|---|
-| `image`, `overhead_image` | T × JPEG | `record` and `overhead` cameras, 224 × 224 |
+| `image` | T × JPEG | the `record` camera, 224 × 224 |
 | `joint_state` | T × 7 | J1..J6 (rad), gripper 0 closed .. 1 open |
 | `eef_state` | T × 7 | TCP x y z (m, base frame), roll pitch yaw (rad), gripper |
 | `action_delta` | T × 7 | TCP target 0.1 s on minus the TCP now (dx dy dz, d roll pitch yaw), gripper 1 open / 0 close |
 | `action_eef` | T × 7 | that TCP target, absolute |
 | `action_joint` | T × 7 | joint targets, gripper 0..1 |
 
-The **RLDS** datasets are `<out>/tfds/kikobot_desk_<task>/1.0.0/` (and `kikobot_desk_all`).
+The **RLDS** datasets are `<out>/tfds/kikobot_desk_<task>/2.0.0/` (and `kikobot_desk_all`).
 Each step holds:
 
-- `observation/image` (primary), `observation/overhead_image` (secondary)
+- `observation/image` (the one camera, primary)
 - `observation/EEF_state` (6), `observation/gripper_state` (1), `observation/joint_state` (7)
 - `action`, which is `action_delta`, plus `action_joint`
 - `language_instruction`, `reward` (1 on the last step), `discount`, `is_first`, `is_last` and `is_terminal`

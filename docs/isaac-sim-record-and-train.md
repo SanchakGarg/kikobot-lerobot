@@ -179,7 +179,7 @@ training data: the same joint keys, and a camera with the same name
 Keep a hand near the power switch the first time. A policy trained only in
 sim has never seen a real camera image. Expect it to reach toward the cube
 but grasp unreliably, until you add some real demonstrations
-(`lerobot-record` with `kikobot_follower`, README §8) to the training set.
+(`lerobot-record` with `kikobot_follower`, [real arm §6](real-arm.md#6-recording-on-the-real-arm)) to the training set.
 
 ## Mixing data from MuJoCo, Isaac and the real arm
 

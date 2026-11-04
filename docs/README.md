@@ -1,19 +1,20 @@
 # Kiko-Bot docs
 
-The main [README](../README.md) covers the MuJoCo sim and the real arm. The
-guides here add **NVIDIA Isaac Sim with the Newton physics engine** and
-**training on a SLURM GPU cluster**.
+The main [README](../README.md) says what the project is and gets you running.
+The guides here have the details.
 
 | Guide | What it covers |
 |---|---|
+| [The MuJoCo sim](sim.md) | The sim server and its options, the room, the desk and its stations, the camera, Newton physics |
+| [The real arm](real-arm.md) | Ports, calibration, teleop options, sag and joint direction, the arm server and servo limits page, the Raspberry Pi HAT |
 | [Isaac Sim setup](isaac-sim-setup.md) | Install Isaac Sim 6 and LeRobot side by side, convert the arm to USD, check it runs |
-| [Teleop in Isaac Sim](isaac-sim-teleop.md) | Start the sim server, drive the arm with the gamepad, all options |
+| [Teleop in Isaac Sim](isaac-sim-teleop.md) | Start the Isaac server, drive the arm with the gamepad, all options |
 | [Record, train, evaluate](isaac-sim-record-and-train.md) | `lerobot-record` in Isaac, inspect and replay datasets, train, run the policy in Isaac and on the real arm |
 | [Scripted demos for OpenVLA](datagen-openvla.md) | `kikobot-datagen`: a scripted expert records perfect desk episodes (Newton + MuJoCo Warp, on SLURM), exported as RLDS for OpenVLA |
 | [Training on SLURM](slurm-training.md) | Move a dataset to the cluster, train on a B200 with `sbatch`, bring the policy back |
-| [Troubleshooting](isaac-sim-troubleshooting.md) | Errors and fixes for the Isaac Sim side |
+| [Troubleshooting](troubleshooting.md) | Errors and fixes, for the sim, the real arm and Isaac Sim |
 
-## The typical setup
+## Isaac Sim and the cluster
 
 ```
  Windows laptop (RTX GPU)                               SLURM cluster (B200)
@@ -39,5 +40,5 @@ guides here add **NVIDIA Isaac Sim with the Newton physics engine** and
   only trains, and training needs only the recorded dataset.
 - **One action space everywhere.** `kikobot_sim` (MuJoCo), `kikobot_isaac`
   and `kikobot_follower` (the real arm) all use `J1.pos`..`J6.pos` in degrees
-  and `gripper.pos` in % open, plus a `record` camera in the sims. A policy
+  and `gripper.pos` in % open, plus the one `record` camera in the sims. A policy
   trained on Isaac data loads on all three.

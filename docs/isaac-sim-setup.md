@@ -194,7 +194,7 @@ desk, red cube and green pad. On connect the scene resets. The left stick moves 
    down), not stretched straight up.
 3. **Gripper:** holding A closes the jaws, and holding B opens them.
 4. **No drift:** the arm holds still when you let go. If it sags or
-   oscillates, see [Troubleshooting](isaac-sim-troubleshooting.md) ("The arm sags, oscillates or is sluggish").
+   oscillates, see [Troubleshooting](troubleshooting.md#isaac-sim) ("The arm sags, oscillates or is sluggish").
 5. **Camera:** run once with `--display_data=true` on the teleop. Rerun then
    shows the `record` camera looking at the arm from in front of the desk.
 

@@ -37,12 +37,12 @@ Server options (`--name value`):
 | Option | Default | What it does |
 |---|---|---|
 | `--scene` | `pick_place` | `pick_place` (red cube), `cylinder` (orange cylinder lying down), `desk_sort` ([desk sorting station](#desk-sorting-station)), `empty` (just the arm) |
-| `--cameras` | `record` | Cameras to render: `record` (front) and/or `overhead` (straight down on the desk), e.g. `--cameras record overhead` |
+| `--cameras` | `record` | Cameras to render. The scene has one, `record`, over the arm and the items |
 | `--width` / `--height` | 640 / 480 | Camera resolution. The robot's `--robot.width/height` must match |
 | `--seed` | random | Fixes where things spawn: the same seed gives the same sequence of scenes |
 | `--physics-dt` | 0.002 | Physics step, seconds |
 | `--render-hz` | 30 | How often the window is redrawn |
-| `--fixed-lighting` | off | The same room light every reset (by default it varies, see [the lab](#the-lab)) |
+| `--fixed-lighting` | off | The same room light every reset (by default it varies, see [the room](#the-room)) |
 | `--light-scale` | 1.0 | Scale every room light, if the images come out too dark or too bright |
 | `--headless` | off | No window. Saves about 1 GB of VRAM. Camera images are still rendered. |
 | `--livestream` | off | With `--headless`: watch in the Isaac Sim WebRTC Streaming Client |
@@ -81,7 +81,7 @@ The controls are the same as in MuJoCo and on the real arm:
 | **Back / View / Share** | **Reset the scene**: arm home, cube and pad respawned. Sims only. |
 
 The full list of teleop options (`--teleop.linear_speed_m_s`, ...) is in
-the [main README](../README.md#4-gamepad-controls).
+the [main README](../README.md#gamepad-controls).
 
 ## 3. Robot options
 
@@ -90,7 +90,7 @@ the [main README](../README.md#4-gamepad-controls).
 | Option | Default | What it does |
 |---|---|---|
 | `host` / `port` | `127.0.0.1` / `5557` | Where the server is |
-| `camera_names` | `[record]` | Which of the server's `--cameras` to observe, e.g. `'[record,overhead]'` |
+| `camera_names` | `[record]` | Which of the server's `--cameras` to observe |
 | `width` / `height` | 640 / 480 | Must match the server's `--width` / `--height` |
 | `image_encoding` | `raw` | `raw`: exact pixels, for one machine. `jpeg`: about 20× smaller, for a network |
 | `reset_on_connect` | true | Start each run from a fresh scene |
@@ -105,21 +105,25 @@ a fixed seed:
 & "$V\lerobot-teleoperate.exe" --robot.type=kikobot_isaac --teleop.type=kikobot_gamepad --fps=60
 ```
 
-## The lab
+## The room
 
-Every scene puts the arm on a grey lab table in a makerspace, the same room
-as the MuJoCo server's, built from the same description
-(`lerobot_robot_kikobot/env/room.py`) by `isaac/room_usd.py`: grey epoxy
-floor, off-white walls, a strip window with daylight, six LED ceiling panels
-and a task light over the table (RectLights), a workbench with a pegboard of tools and a 3D printer behind
-the arm, steel shelving with storage bins, a whiteboard and a stool. A faint
-dome light stands in for the light bouncing around a real room.
+Every scene puts the arm in the front-left corner of a study desk with a
+hutch and a tube light, in a room lit by eight small downlights. It is the
+same room as the MuJoCo server's, built from the same description
+(`lerobot_robot_kikobot/env/room.py`) by `isaac/room_usd.py`:
+- The downlights are DiskLights.
+- The tube is a CylinderLight.
+- A faint dome light stands in for the light bouncing around a real room.
 
-On every reset the light changes: the panels' dimmer level and colour
-temperature (4300–6500 K, all panels alike), some panels switched off, the
-sun on or off, and its angle through the window. `--fixed-lighting` turns
-that off. RTX exposure differs between machines; if the images look too
-dark or washed out, start the server with `--light-scale 0.5` or `2`.
+The full description, with the camera's position, is in
+[the MuJoCo sim guide](sim.md#2-the-room-and-the-desk).
+
+On every reset the light changes: the downlights' dimmer level and colour
+temperature, now and then one switched off, and the tube's brightness.
+`--fixed-lighting` turns that off.
+
+RTX exposure differs between machines. If the images look too dark or
+washed out, start the server with `--light-scale 0.5` or `2`.
 
 ## Mirror the real arm into Isaac Sim
 
@@ -138,39 +142,18 @@ running, the real arm still runs and the log says so.
 
 ## Desk sorting station
 
-`--scene desk_sort` turns the arm's table into a stationery sorting
-station, the same in Isaac Sim and in MuJoCo (`kikobot-sim-server --scene
-desk_sort`): the stations and items are described once, in
-`lerobot_robot_kikobot/desk/`. Around the arm, inside its reach, there is a
-proper place for every kind of item:
-
-| Station | Where | For |
-|---|---|---|
-| **Pen cup** (black) | front right | pens, pencils |
-| **Marker cup** (blue) | right | markers, highlighters |
-| **Tape peg** | back right | tape rolls: they drop over the post |
-| **Supply tray**, 3 compartments | front left | glue sticks, erasers, the sharpener, the paper clip box |
-| **Note mat** | left | sticky-note pads |
-| **Long tray** | back left | scissors, the ruler, the stapler |
-
-In front of the arm lies the clutter, drawn from a pool of 32 items (8 pens,
-4 pencils, 4 markers, 3 highlighters, 2 each of tape rolls, glue sticks,
-erasers and sticky-note pads, and a pair of scissors, a stapler, a ruler, a
-paper clip box and a sharpener): 3 to 7 writing tools and 2 to 4 other
-supplies per desk, each with a random colour, texture (stripes, bands, grip dots,
-printed label, polka dots, ...) and finish, on the grey table.
-
-Every reset (and the gamepad's Back button) draws a new desk. **Pens can
-land on top of each other**: about a fifth of the writing tools are dropped
-across ones already on the desk (up to three layers), then the server runs
-1 s of physics with the arm held still so the piles settle before the
-episode starts (`--settle-s` on the server). The same `--seed` gives
+`--scene desk_sort` lays out a stationery sorting station on the desk. It
+is the same in Isaac Sim and in MuJoCo (`kikobot-sim-server --scene
+desk_sort`): every kind of item has its station within the arm's reach,
+and the clutter is drawn from a pool of real-sized pens, pencils, markers,
+tape rolls and other supplies. Stations, items and sizes are listed in
+[the MuJoCo sim guide](sim.md#the-desk-sorting-station). Every reset
+(and the gamepad's Back button) draws a new desk; the same `--seed` gives
 the same sequence of desks.
 
 ```powershell
-& "$I\python.exe" isaac\kikobot_isaac_server.py --scene desk_sort --cameras record overhead
+& "$I\python.exe" isaac\kikobot_isaac_server.py --scene desk_sort
 & "$V\lerobot-teleoperate.exe" --robot.type=kikobot_isaac `
-  --robot.camera_names='[record,overhead]' `
   --teleop.type=kikobot_gamepad --display_data=true
 ```
 
