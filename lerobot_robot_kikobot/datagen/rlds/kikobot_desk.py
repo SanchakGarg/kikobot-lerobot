@@ -2,12 +2,11 @@
 
 One TFDS dataset per task (flat names, as OpenVLA's dataset configs expect),
 built from the raw episodes of `kikobot-datagen record` (the TFDS manual
-dir, `<out>/raw/<task>/episode_*.npz`) into `<out>/tfds/kikobot_desk_<task>/1.0.0`.
+dir, `<out>/raw/<task>/episode_*.npz`) into `<out>/tfds/kikobot_desk_<task>/2.0.0`.
 The layout follows OpenVLA's Bridge entry, so OpenVLA's RLDS loader reads it
 with the config in openvla_snippets/kikobot_oxe.py:
 
     steps/observation/image           224x224x3 jpeg   the `record` camera (primary)
-    steps/observation/overhead_image  224x224x3 jpeg   the `overhead` camera (secondary)
     steps/observation/EEF_state       float32[6]  TCP x y z (m, robot base frame), roll pitch yaw (rad)
     steps/observation/gripper_state   float32[1]  0 closed .. 1 open
     steps/observation/joint_state     float32[7]  J1..J6 (rad), gripper 0..1
@@ -51,8 +50,11 @@ def _is_val(path: Path) -> bool:
 class KikobotDeskBase(tfds.core.GeneratorBasedBuilder, skip_registration=True):
     """Scripted, verified Kiko-Bot desk-tidying demonstrations (MuJoCo / Newton sim)."""
 
-    VERSION = tfds.core.Version("1.0.0")
-    RELEASE_NOTES = {"1.0.0": "First release."}
+    VERSION = tfds.core.Version("2.0.0")
+    RELEASE_NOTES = {
+        "1.0.0": "First release.",
+        "2.0.0": "One camera (`record`, over the arm in the desk's corner); no `overhead_image`.",
+    }
     MANUAL_DOWNLOAD_INSTRUCTIONS = "Record episodes with `kikobot-datagen record`; the manual dir is <out>/raw."
     TASKS: tuple[str, ...] = ()
 
@@ -67,7 +69,6 @@ class KikobotDeskBase(tfds.core.GeneratorBasedBuilder, skip_registration=True):
                 "steps": tfds.features.Dataset({
                     "observation": tfds.features.FeaturesDict({
                         "image": img,
-                        "overhead_image": img,
                         "EEF_state": vec(6, "TCP x y z (m), roll pitch yaw (rad), robot base frame."),
                         "gripper_state": vec(1, "Jaw opening, 0 closed .. 1 open."),
                         "joint_state": vec(7, "J1..J6 (rad), gripper 0..1."),
@@ -122,7 +123,6 @@ def episode_example(path: Path) -> dict:
         steps.append({
             "observation": {
                 "image": _resize(decode_jpeg(ep["image"][i]), IMAGE_SIZE),
-                "overhead_image": _resize(decode_jpeg(ep["overhead_image"][i]), IMAGE_SIZE),
                 "EEF_state": eef[i, :6],
                 "gripper_state": eef[i, 6:7],
                 "joint_state": ep["joint_state"][i].astype(np.float32),

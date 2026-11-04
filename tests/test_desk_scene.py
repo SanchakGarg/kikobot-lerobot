@@ -26,17 +26,17 @@ def _item_positions(w):
     return {p.name: w.data.qpos[a : a + 3].copy() for p, a in zip(w._desk.placements, w._desk.qpos_adr)}
 
 
-def test_desk_settles_on_the_table(world):
+def test_desk_settles_on_the_desk(world):
     w = world
     w.step(500)  # 1 s more after the reset's own settling.
     speed = max(np.linalg.norm(w.data.qvel[a : a + 6]) for a in w._desk.dof_adr)
     assert speed < 0.1, f"the desk is not at rest: an item still moves at {speed:.2f}"
     for p, pos in zip(w._desk.placements, _item_positions(w).values()):
         if p.active:
-            assert -0.01 < pos[2] < 0.12, (p.name, pos)  # on the table, or in a cup
+            assert -0.01 < pos[2] < 0.12, (p.name, pos)  # on the desk, or in a cup
             assert math.hypot(*pos[:2]) < 0.5, (p.name, pos)
         else:
-            assert pos[2] < L.FLOOR_Z + 0.1, (p.name, pos)  # still parked under the table
+            assert pos[2] < L.FLOOR_Z + 0.1, (p.name, pos)  # still parked on the floor
 
 
 @pytest.mark.parametrize("seed", [2, 7, 11])
@@ -76,7 +76,7 @@ def test_tape_roll_drops_over_the_peg():
 
 
 def test_camera_sees_the_desk(world):
-    img = world.render(["overhead"], 160, 120)["overhead"]
+    img = world.render(["record"], 160, 120)["record"]
     assert img.std() > 10
 
 

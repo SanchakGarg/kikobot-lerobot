@@ -110,9 +110,12 @@ def test_arm_in_a_station_is_a_violation():
     from lerobot_robot_kikobot.datagen.expert import down_rot
 
     kin = ArmKinematics()
-    # The jaws straight down onto the supply tray's +X wall, fingertips below its top.
+    # The jaws straight down onto the supply tray's end wall nearer the arm,
+    # fingertips below its top.
     st = L.TRAY
-    wall = np.array(st.xy) + (st.half[0] - 0.002) * np.array([math.cos(st.yaw), math.sin(st.yaw)])
+    axis = np.array([math.cos(st.yaw), math.sin(st.yaw)])
+    sign = -1.0 if np.dot(st.xy, axis) > 0 else 1.0
+    wall = np.array(st.xy) + sign * (st.half[0] - 0.002) * axis
     target = np.array([wall[0], wall[1], 0.015 + 0.0472])
     q = kin.solve(kin.ready_q(), target, down_rot(np.array([-math.sin(st.yaw), math.cos(st.yaw), 0.0])), 400)
     assert np.linalg.norm(kin.fk(q)[0] - target) < 0.002
@@ -201,7 +204,6 @@ def _fake_episode(path, task: str, n: int = 6, seed: int = 0) -> None:
         "action_eef": act,
         "action_delta": act,
         "image": np.asarray([img() for _ in range(n)], dtype=object),
-        "overhead_image": np.asarray([img() for _ in range(n)], dtype=object),
         "language_instruction": np.asarray(TASKS[task].instruction),
         "task": np.asarray(task),
         "seed": np.asarray(seed),
@@ -221,7 +223,7 @@ def test_rlds_export(tmp_path):
         _fake_episode(raw / f"episode_{k:05d}.npz", task, seed=k)
     build(tmp_path, task)
     # Read back the way OpenVLA does: by name and data_dir, without our builder code.
-    b = tfds.builder_from_directory(str(tmp_path / "tfds" / dataset_name(task) / "1.0.0"))
+    b = tfds.builder_from_directory(str(tmp_path / "tfds" / dataset_name(task) / "2.0.0"))
     total = sum(s.num_examples for s in b.info.splits.values())
     assert total == 3
     split = next(iter(b.info.splits))

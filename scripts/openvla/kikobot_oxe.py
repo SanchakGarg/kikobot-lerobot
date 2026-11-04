@@ -10,7 +10,7 @@ does), or paste the same entries into prismatic/vla/datasets/rlds/oxe/
 configs.py, transforms.py and mixtures.py.
 
 The datasets follow the layout of OpenVLA's `bridge_orig` entry:
-  image (primary) and overhead_image (secondary), 224 x 224
+  image (primary; there is one camera), 224 x 224
   state: EEF_state (x y z roll pitch yaw) + pad + gripper_state  -> POS_EULER
   action: delta x y z, delta roll pitch yaw, gripper 1 = open / 0 = close -> EEF_POS
 so the standardization transform has nothing left to do but pass it through.
@@ -43,7 +43,7 @@ def kikobot_desk_dataset_transform(trajectory: dict) -> dict:
 
 def dataset_config(StateEncoding, ActionEncoding) -> dict:  # noqa: N803 - OpenVLA's enum classes
     return {
-        "image_obs_keys": {"primary": "image", "secondary": "overhead_image", "wrist": None},
+        "image_obs_keys": {"primary": "image", "secondary": None, "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["EEF_state", None, "gripper_state"],
         "state_encoding": StateEncoding.POS_EULER,

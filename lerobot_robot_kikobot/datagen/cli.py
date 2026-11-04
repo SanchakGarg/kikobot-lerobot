@@ -111,15 +111,14 @@ def cmd_convert(args) -> None:
 
 
 def cmd_preview(args) -> None:
-    """Write one episode's cameras side by side as an mp4 (needs imageio[ffmpeg]) or a PNG strip."""
+    """Write one episode's camera as an mp4 (needs imageio[ffmpeg]) or a PNG strip."""
     import numpy as np
 
     from .record import decode_jpeg, load_episode
 
     path = Path(args.out) / "raw" / get_task(args.task).name / f"episode_{args.episode:05d}.npz"
     ep = load_episode(path)
-    frames = [np.concatenate([decode_jpeg(a), decode_jpeg(b)], axis=1)
-              for a, b in zip(ep["image"], ep["overhead_image"])]
+    frames = [decode_jpeg(a) for a in ep["image"]]
     dst = Path(args.dst or path.with_suffix(".mp4"))
     try:
         import imageio.v3 as iio

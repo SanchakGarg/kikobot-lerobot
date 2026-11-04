@@ -6,7 +6,7 @@
 
 The same stations (layout.STATIONS) and items (layout.KINDS, meshes.py) as
 the Isaac Sim scene. Every pool item exists all the time: each reset puts a
-random subset on the desk and parks the rest on the floor under the table.
+random subset on the desk and parks the rest on the floor, out of view.
 Looks change by swapping materials' colours and textures, so the model is
 never recompiled.
 """
@@ -29,6 +29,7 @@ PRINT_LEVEL = 0.25
 Z_TO_X = [math.sqrt(0.5), 0.0, math.sqrt(0.5), 0.0]  # Turns a geom's Z axis onto X.
 RING_SEGMENTS = 12
 HIDDEN_GROUP = 3  # Colliders: simulated, not drawn.
+ITEM_DAMPING = 1e-4  # N m s / rad on each item's free joint (and N s / m: MuJoCo uses one value).
 
 
 def _yaw_quat(yaw: float) -> list[float]:
@@ -100,8 +101,9 @@ def _colliders(body, item: L.PoolItem) -> None:
     spec = item.spec
     shape = spec.collider
     # Round items (pens, markers, glue sticks) need rolling friction (condim 6),
-    # or a pen nudged once rolls on for ever.
-    condim = 6 if shape in ("capsule", "cylinder_x") else 4
+    # or a pen nudged once rolls on for ever; so do pencils, which can come to
+    # rest balanced on an edge across another pencil and rock there.
+    condim = 6 if shape in ("capsule", "cylinder_x") or spec.writing else 4
     common = dict(group=HIDDEN_GROUP, rgba=[0, 0, 0, 0], friction=[spec.friction, 0.01, 0.01], condim=condim)
     if item.kind == "scissors":
         sx, sy, sz = hx / 0.070, hy / 0.022, hz / 0.004
@@ -130,7 +132,7 @@ def _colliders(body, item: L.PoolItem) -> None:
 
 
 def add_desk(spec: mujoco.MjSpec, pool: list[L.PoolItem] | None = None, textures: bool = True) -> list[L.PoolItem]:
-    """The stations and every pool item (parked under the table). `textures=False`:
+    """The stations and every pool item (parked on the floor). `textures=False`:
     plain colours, so the spec can be written as MJCF (see mujoco_scene.build_scene)."""
     pool = pool if pool is not None else L.default_pool()
     _add_looks(spec, textures)
@@ -138,9 +140,16 @@ def add_desk(spec: mujoco.MjSpec, pool: list[L.PoolItem] | None = None, textures
         _station_geoms(spec, st)
     for i, item in enumerate(pool):
         body = spec.worldbody.add_body(name=f"desk_{item.name}", pos=list(L.park_pose(i, item)))
-        body.add_freejoint(name=f"desk_{item.name}_free")
+        free = body.add_freejoint(name=f"desk_{item.name}_free")
+        # A whisper of damping: these items weigh grams, and a pencil balanced
+        # across another can otherwise rock on its edge for ever. It takes
+        # milliseconds off a spin and nothing measurable off a fall.
+        try:
+            free.damping = ITEM_DAMPING
+        except TypeError:  # MuJoCo 3.16+ takes a polynomial: the linear term only.
+            free.damping = [ITEM_DAMPING, 0.0, 0.0]
         hx, hy, hz = item.half
-        m = item.spec.mass
+        m = item.mass
         body.explicitinertial = True
         # Centre of mass at the item's centre. Left unset, MjSpec puts it at the
         # body's position in the world: a metre off, and the item flails.
@@ -152,7 +161,7 @@ def add_desk(spec: mujoco.MjSpec, pool: list[L.PoolItem] | None = None, textures
         if textures:
             body_mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = "desk_tex_solid"
         spec.add_material(name=f"desk_{item.name}_accent", rgba=[0.1, 0.1, 0.8, 1.0])
-        for j, (role, mesh) in enumerate(M.procedural_item(item.kind)):
+        for j, (role, mesh) in enumerate(M.procedural_item(item.kind, item.half)):
             mesh_name = f"desk_{item.name}_mesh{j}"
             _add_mesh(spec, mesh_name, mesh)
             material = {"body": f"desk_{item.name}_body", "accent": f"desk_{item.name}_accent"}.get(role, f"desk_fixed_{role}")
@@ -163,7 +172,7 @@ def add_desk(spec: mujoco.MjSpec, pool: list[L.PoolItem] | None = None, textures
 
 
 class DeskRuntime:
-    """Puts a new desk on the table: which items, where, and how they look."""
+    """Lays out a new desk: which items, where, and how they look."""
 
     def __init__(self, model: mujoco.MjModel, pool: list[L.PoolItem] | None = None):
         self.pool = pool if pool is not None else L.default_pool()

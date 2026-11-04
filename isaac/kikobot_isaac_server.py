@@ -107,7 +107,7 @@ def mjcf_limits(robot_xml: Path = MODELS / "robot.xml") -> dict[str, tuple[float
 
 def sample_xy(rng: np.random.Generator) -> np.ndarray:
     r = rng.uniform(*SPAWN_RADIUS_M)
-    a = rng.uniform(-SPAWN_HALF_ANGLE_RAD, SPAWN_HALF_ANGLE_RAD)
+    a = rng.uniform(-SPAWN_HALF_ANGLE_RAD, SPAWN_HALF_ANGLE_RAD) + math.radians(room.WORK_YAW_DEG)
     return np.array([r * math.cos(a), r * math.sin(a)])
 
 
@@ -463,7 +463,7 @@ class IsaacNewtonBackend(Backend):
         UsdGeom.SetStageMetersPerUnit(stage, 1.0)
         UsdGeom.Xform.Define(stage, "/World")
         stage.SetDefaultPrim(stage.GetPrimAtPath("/World"))
-        # The lab, its lights and the arm's grey table (env/room.py), the same as MuJoCo's.
+        # The lab, its lights and the arm's desk with its hutch (env/room.py), the same as MuJoCo's.
         self.room_lights = room_usd.build_room(stage, LAB, Path(self.args.room_textures), self.args.light_scale)
 
         def material(path: str, rgb, friction: float | None = None):
@@ -506,7 +506,7 @@ class IsaacNewtonBackend(Backend):
         # Object to pick: free rigid body. Pose is set per episode by respawn().
         if scene == "pick_place":
             red = material("/World/Looks/Cube", (0.85, 0.12, 0.12), friction=1.5)
-            obj = box("/World/Object", (0.25, 0, 0.016), (0.016, 0.016, 0.016), red)
+            obj = box("/World/Object", (-0.125, 0.217, 0.016), (0.016, 0.016, 0.016), red)
             self.object_base_quat = np.array([1.0, 0, 0, 0])
             self.object_z = 0.016
         else:  # cylinder, lying on its side
@@ -515,7 +515,7 @@ class IsaacNewtonBackend(Backend):
             obj.CreateRadiusAttr(0.015)
             obj.CreateHeightAttr(0.08)
             obj.CreateAxisAttr("Z")
-            UsdGeom.Xformable(obj).AddTranslateOp().Set(Gf.Vec3d(0.25, 0, 0.015))
+            UsdGeom.Xformable(obj).AddTranslateOp().Set(Gf.Vec3d(-0.125, 0.217, 0.015))
             UsdPhysics.CollisionAPI.Apply(obj.GetPrim())
             bind(obj.GetPrim(), orange)
             s = math.sqrt(0.5)
@@ -530,7 +530,7 @@ class IsaacNewtonBackend(Backend):
         pad = UsdGeom.Cylinder.Define(stage, "/World/Pad")
         pad.CreateRadiusAttr(0.055)
         pad.CreateHeightAttr(0.016)
-        UsdGeom.Xformable(pad).AddTranslateOp().Set(Gf.Vec3d(0.26, 0.22, 0.008))
+        UsdGeom.Xformable(pad).AddTranslateOp().Set(Gf.Vec3d(-0.225, 0.13, 0.008))
         UsdPhysics.CollisionAPI.Apply(pad.GetPrim())
         rb = UsdPhysics.RigidBodyAPI.Apply(pad.GetPrim())
         rb.CreateKinematicEnabledAttr(True)

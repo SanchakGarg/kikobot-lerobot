@@ -34,7 +34,7 @@ import numpy as np
 from .protocol import ARM_JOINTS
 from .kinematics import ArmKinematics
 from .env.mujoco_scene import SCENE_NAMES, RoomLights, build_scene, scene_mjcf
-from .env.room import fixed_lighting, lab_room, sample_lighting
+from .env.room import WORK_YAW_DEG, fixed_lighting, lab_room, sample_lighting
 from .protocol import DEFAULT_PORT, IMAGE_ENCODINGS, PROTOCOL_VERSION, pack, pack_observation, unpack
 from .sim_backends import ENGINES, RENDERERS, MjWarpRenderer, NewtonEngine, OpenGLRenderer, resolve_engine, resolve_renderer
 
@@ -51,7 +51,8 @@ STATS_EVERY_S = 10.0
 # desk_sort: physics with the arm held at ready after each new desk, so
 # stacked pens drop and come to rest before the episode starts.
 SETTLE_S = 1.0
-# Objects respawn in a fan in front of the arm, within comfortable reach.
+# Objects respawn in a fan over the desk, within comfortable reach: the arm
+# sits in the desk's corner and looks over it along WORK_YAW_DEG (room.py).
 SPAWN_RADIUS_M = (0.22, 0.32)
 SPAWN_HALF_ANGLE_RAD = math.radians(40.0)
 MIN_OBJECT_PAD_GAP_M = 0.12
@@ -73,7 +74,7 @@ class SimWorld:
         self.engine_name = resolve_engine(engine)
         self.renderer_name = resolve_renderer(renderer, self.engine_name)
         if scene in SCENE_NAMES:
-            # The arm in the lab (env/room.py), with the task on its table.
+            # The arm in the lab (env/room.py), with the task on its desk.
             self.room = lab_room()
             m = self.model = build_scene(scene, self.room).compile()
         else:
@@ -191,7 +192,7 @@ class SimWorld:
 
     def _sample_xy(self) -> np.ndarray:
         r = self.rng.uniform(*SPAWN_RADIUS_M)
-        a = self.rng.uniform(-SPAWN_HALF_ANGLE_RAD, SPAWN_HALF_ANGLE_RAD)
+        a = self.rng.uniform(-SPAWN_HALF_ANGLE_RAD, SPAWN_HALF_ANGLE_RAD) + math.radians(WORK_YAW_DEG)
         return np.array([r * math.cos(a), r * math.sin(a)])
 
     def _respawn_objects(self) -> None:

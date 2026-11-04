@@ -6,9 +6,10 @@ Isaac Sim server (isaac/desk_assets.py) build the same stations from
 package imports: the Isaac Sim server loads this file by path. Tested in
 tests/test_desk_layout.py.
 
-Frames: the arm's base is at the origin on the tabletop (z = 0), the record
-camera looks back at it from +X. Every item's local frame has its long axis
-along X and its resting face down, so a placement is just (x, y, z, yaw).
+Frames: the arm's base is at the origin on the desktop (z = 0), in the
+desk's front-left corner (env/room.py); the desk runs to +X and -Y from it.
+Every item's local frame has its long axis along X and its resting face
+down, so a placement is just (x, y, z, yaw).
 
 Pens, pencils, markers and highlighters may land on top of each other: a
 stacked one is dropped from just above whatever it crosses and settles during
@@ -27,14 +28,17 @@ import numpy as np
 
 @dataclass(frozen=True)
 class KindSpec:
-    """Default size of one kind of item, lying on the desk.
+    """One kind of item, lying on the desk.
 
-    `half` are the collider's half extents in the item frame (X = long axis);
-    `collider` is capsule | cylinder_x | cylinder_z | ring | box | scissors.
-    A ring is a hollow upright cylinder (a tape roll, which drops over the
-    tape peg), `ring_inner` its inner radius. The
-    layout only needs the footprint (a 2D capsule: segment half length along X
-    plus radius) and `half[2]`, the height of the item's centre above the desk.
+    `half` are the collider's half extents in the item frame (X = long axis)
+    for the kind's most common size; `sizes` are the real sizes it comes in
+    (half extents too, the first being `half`), which the pool cycles
+    through. `collider` is capsule | cylinder_x | cylinder_z | ring | box |
+    scissors. A ring is a hollow upright cylinder (a tape roll, which drops
+    over the tape peg), `ring_inner` its inner radius. `mass` is for `half`;
+    other sizes scale it with their volume. The layout only needs the
+    footprint (a 2D capsule: segment half length along X plus radius) and
+    `half[2]`, the height of the item's centre above the desk.
     """
 
     collider: str
@@ -43,6 +47,10 @@ class KindSpec:
     friction: float
     writing: bool = False  # pen-like: may be stacked, goes in a cup
     ring_inner: float = 0.0
+    sizes: tuple[tuple[float, float, float], ...] = ()
+
+    def all_sizes(self) -> tuple[tuple[float, float, float], ...]:
+        return (self.half, *(h for h in self.sizes if h != self.half))
 
     def footprint(self) -> tuple[float, float]:
         hx, hy, _ = self.half
@@ -53,37 +61,54 @@ class KindSpec:
         return max(hx - hy, 0.0), r
 
 
+# Sizes are real products'. Two limits keep every size workable: the open
+# jaws span 53.6 mm, so anything gripped across is at most ~37 mm wide (a
+# tape roll, gripped round its rim with the jaws wide open, at most 46 mm
+# across), and the supply tray's compartments take items up to 11 cm long
+# and 3.7 cm wide.
 KINDS: dict[str, KindSpec] = {
-    # Ballpoint: 14 cm, 10 mm barrel.
-    "pen": KindSpec("capsule", (0.070, 0.005, 0.005), 0.008, 0.8, writing=True),
-    # Hex pencil, 17.5 cm, 7.5 mm across the flats (box collider: no rolling).
-    "pencil": KindSpec("box", (0.0875, 0.00375, 0.00375), 0.006, 0.9, writing=True),
-    # Felt-tip marker, 13 cm, 17 mm.
-    "marker": KindSpec("capsule", (0.065, 0.0085, 0.0085), 0.015, 0.8, writing=True),
-    # Flat highlighter, 12 cm x 22 x 14 mm.
-    "highlighter": KindSpec("box", (0.060, 0.011, 0.007), 0.014, 0.8, writing=True),
-    # Glue stick lying down, 8.5 cm, 22 mm.
-    "glue_stick": KindSpec("cylinder_x", (0.0425, 0.011, 0.011), 0.025, 1.0),
-    # Tape roll lying flat: 44 mm across (fits the open gripper), 13 mm wide.
-    "tape_roll": KindSpec("ring", (0.022, 0.022, 0.0065), 0.030, 1.0, ring_inner=0.0125),
-    # Small scissors lying flat: blades + handle loops, 14 cm.
-    "scissors": KindSpec("scissors", (0.070, 0.022, 0.004), 0.040, 0.6),
-    # Block eraser, 44 x 22 x 12 mm.
-    "eraser": KindSpec("box", (0.022, 0.011, 0.006), 0.010, 1.2),
-    # A 76 mm pad of sticky notes, 16 mm thick.
-    "sticky_notes": KindSpec("box", (0.038, 0.038, 0.008), 0.030, 1.0),
-    # Desk stapler, 13 cm x 36 mm x 44 mm: just fits the open jaws across.
-    "stapler": KindSpec("box", (0.065, 0.018, 0.022), 0.150, 0.8),
-    # 20 cm ruler, 30 mm wide, 4 mm thick.
-    "ruler": KindSpec("box", (0.100, 0.015, 0.002), 0.012, 0.7),
-    # Small box of paper clips.
-    "paper_clip_box": KindSpec("box", (0.025, 0.018, 0.012), 0.030, 0.9),
-    # Pencil sharpener.
-    "sharpener": KindSpec("box", (0.013, 0.010, 0.010), 0.010, 0.9),
+    # Ballpoint, 14 cm x 10 mm; a slim stick pen, 13.5 cm x 8 mm; a chunky gel pen, 14.5 cm x 11 mm.
+    "pen": KindSpec("capsule", (0.070, 0.005, 0.005), 0.008, 0.8, writing=True,
+                    sizes=((0.0675, 0.004, 0.004), (0.0725, 0.0055, 0.0055))),
+    # Hex pencil, 7.5 mm across the flats (box collider: no rolling): new
+    # (17.5 cm), part used (13 cm) and a stub (9.5 cm).
+    "pencil": KindSpec("box", (0.0875, 0.00375, 0.00375), 0.006, 0.9, writing=True,
+                       sizes=((0.065, 0.00375, 0.00375), (0.0475, 0.00375, 0.00375))),
+    # Felt-tip marker, 13 cm x 17 mm; a fineliner, 13.5 cm x 11 mm; a whiteboard marker, 12 cm x 19 mm.
+    "marker": KindSpec("capsule", (0.065, 0.0085, 0.0085), 0.015, 0.8, writing=True,
+                       sizes=((0.0675, 0.0055, 0.0055), (0.060, 0.0095, 0.0095))),
+    # Flat highlighter, 12 cm x 22 x 14 mm; a pocket one, 10.5 cm; a big one, 12.5 cm.
+    "highlighter": KindSpec("box", (0.060, 0.011, 0.007), 0.014, 0.8, writing=True,
+                            sizes=((0.0525, 0.0095, 0.0065), (0.0625, 0.0115, 0.0075))),
+    # Glue stick lying down: 15 g (8.5 cm x 22 mm), 8 g (7 cm x 18 mm), 21 g (9 cm x 25 mm).
+    "glue_stick": KindSpec("cylinder_x", (0.0425, 0.011, 0.011), 0.025, 1.0,
+                           sizes=((0.035, 0.009, 0.009), (0.045, 0.0125, 0.0125))),
+    # Tape roll lying flat, on a 25 mm core: 13 mm x 44 mm, a mini 12 mm x
+    # 33 mm, 19 mm x 44 mm (the classic desk roll) and 25 mm x 46 mm.
+    "tape_roll": KindSpec("ring", (0.022, 0.022, 0.0065), 0.030, 1.0, ring_inner=0.0125,
+                          sizes=((0.0165, 0.0165, 0.006), (0.022, 0.022, 0.0095), (0.023, 0.023, 0.0125))),
+    # Scissors lying flat: blades + handle loops, 14 cm; 13 cm kids'; 17 cm office.
+    "scissors": KindSpec("scissors", (0.070, 0.022, 0.004), 0.040, 0.6,
+                         sizes=((0.065, 0.020, 0.004), (0.085, 0.022, 0.0045))),
+    # Block eraser, 44 x 22 x 12 mm; 40 x 20 x 12 mm; a 60 x 25 x 13 mm one.
+    "eraser": KindSpec("box", (0.022, 0.011, 0.006), 0.010, 1.2,
+                       sizes=((0.020, 0.010, 0.006), (0.030, 0.0125, 0.0065))),
+    # Sticky notes: a 76 mm pad, 16 mm thick; a 51 x 38 mm pad, 13 mm thick.
+    "sticky_notes": KindSpec("box", (0.038, 0.038, 0.008), 0.030, 1.0,
+                             sizes=((0.0255, 0.019, 0.0065),)),
+    # Desk stapler, 13 cm x 36 mm x 44 mm; a mini one, 10 cm x 29 x 34 mm.
+    "stapler": KindSpec("box", (0.065, 0.018, 0.022), 0.150, 0.8,
+                        sizes=((0.050, 0.0145, 0.017),)),
+    # Ruler, 20 cm or 15 cm, 30 / 25 mm wide, 4 mm thick.
+    "ruler": KindSpec("box", (0.100, 0.015, 0.002), 0.012, 0.7,
+                      sizes=((0.075, 0.0125, 0.002),)),
+    # Box of paper clips: 50 x 36 x 24 mm; small 40 x 30 x 20 mm; large 56 x 37 x 26 mm.
+    "paper_clip_box": KindSpec("box", (0.025, 0.018, 0.012), 0.030, 0.9,
+                               sizes=((0.020, 0.015, 0.010), (0.028, 0.0185, 0.013))),
+    # Pencil sharpener: single hole, 26 x 20 x 20 mm; double hole, 34 x 22 x 22 mm.
+    "sharpener": KindSpec("box", (0.013, 0.010, 0.010), 0.010, 0.9,
+                          sizes=((0.017, 0.011, 0.011),)),
 }
-
-WRITING_KINDS = tuple(k for k, s in KINDS.items() if s.writing)
-SUPPLY_KINDS = tuple(k for k, s in KINDS.items() if not s.writing)
 
 
 @dataclass(frozen=True)
@@ -92,13 +117,18 @@ class PoolItem:
 
     name: str
     kind: str
-    # Collider half extents. Defaults to KINDS[kind].half; the backend
-    # replaces it with the real size when it loads a Nucleus asset.
+    # Collider half extents: one of KINDS[kind].all_sizes(). The Isaac
+    # backend replaces it with the real size when it loads a Nucleus asset.
     half: tuple[float, float, float]
 
     @property
     def spec(self) -> KindSpec:
         return KINDS[self.kind]
+
+    @property
+    def mass(self) -> float:
+        """The kind's mass, scaled to this item's size by volume."""
+        return self.spec.mass * float(np.prod(self.half) / np.prod(self.spec.half))
 
     def footprint(self) -> tuple[float, float]:
         return replace(self.spec, half=self.half).footprint()
@@ -106,28 +136,30 @@ class PoolItem:
 
 # How many of each kind exist. Each episode shows a random subset.
 DEFAULT_COUNTS: dict[str, int] = {
-    "pen": 8,
+    "pen": 9,
     "pencil": 4,
     "marker": 4,
     "highlighter": 3,
-    "glue_stick": 2,
-    "tape_roll": 2,
-    "eraser": 2,
+    "glue_stick": 3,
+    "tape_roll": 4,
+    "eraser": 3,
     "sticky_notes": 2,
     "scissors": 1,
     "stapler": 1,
     "ruler": 1,
-    "paper_clip_box": 1,
-    "sharpener": 1,
+    "paper_clip_box": 2,
+    "sharpener": 2,
 }
 
 
 def default_pool(counts: dict[str, int] = DEFAULT_COUNTS) -> list[PoolItem]:
-    return [
-        PoolItem(f"{kind}_{i}", kind, KINDS[kind].half)
-        for kind, n in counts.items()
-        for i in range(n)
-    ]
+    """Every item, each kind cycling through its real sizes, so every desk
+    shows a spread of them."""
+    out = []
+    for kind, n in counts.items():
+        sizes = KINDS[kind].all_sizes()
+        out += [PoolItem(f"{kind}_{i}", kind, sizes[i % len(sizes)]) for i in range(n)]
+    return out
 
 
 # ------------------------------------------------------------- the stations
@@ -229,18 +261,23 @@ def _pad_zone(name, xy, yaw, h, accepts) -> Station:
     return Station(name, xy, yaw, (h, h), accepts, parts)
 
 
-# Around the arm, inside its reach and clear of the clutter fan in front of
-# it: cups and the tape peg on its right, trays and the note mat on its left
-# and behind it. Trays lie tangent to the arm, so it reaches along them.
-PEN_CUP = _cup("pen_cup", _polar(0.24, -60.0), 0.038, 0.095, ("pen", "pencil"))
-CUP_HEIGHT = 0.095
-MARKER_CUP = _cup("marker_cup", _polar(0.25, -100.0), 0.042, 0.085, ("marker", "highlighter"), role="cup_blue")
-TAPE_PEG = _peg("tape_peg", _polar(0.24, -140.0), ("tape_roll",))
-TRAY = _tray("supply_tray", _polar(0.25, 62.0), math.radians(62.0 + 90.0), 0.095, 0.060, 0.03, 3,
+# The way the arm looks over the desk from its corner, as env/room.py's
+# WORK_YAW_DEG: the middle of the quarter between -X and +Y.
+WORK_YAW_DEG = 135.0
+
+# Around the arm, inside its reach and on the desk, clear of the clutter fan
+# that opens towards WORK_YAW_DEG and of the arm's blind spot (between about
+# -90 and -50 degrees, where J1 runs out, which points off the desk): along
+# the front edge the marker cup, the tape peg (under the ready pose, where
+# only a low station may be) and the supply tray, the pen cup to the arm's
+# right, and in the back-left corner the note mat and the long tray.
+PEN_CUP = _cup("pen_cup", _polar(0.265, 90.0), 0.038, 0.095, ("pen", "pencil"))
+MARKER_CUP = _cup("marker_cup", _polar(0.235, -33.0), 0.042, 0.085, ("marker", "highlighter"), role="cup_blue")
+TAPE_PEG = _peg("tape_peg", _polar(0.23, 19.0), ("tape_roll",))
+TRAY = _tray("supply_tray", _polar(0.31, 54.0), math.radians(54.0), 0.095, 0.060, 0.03, 3,
              ("glue_stick", "eraser", "sharpener", "paper_clip_box"))
-TRAY_WALL_HEIGHT = 0.03
-NOTE_MAT = _pad_zone("note_mat", _polar(0.24, 112.0), math.radians(112.0), 0.045, ("sticky_notes",))
-LONG_TRAY = _tray("long_tray", _polar(0.27, 160.0), math.radians(160.0 + 90.0), 0.12, 0.045, 0.025, 1,
+NOTE_MAT = _pad_zone("note_mat", _polar(0.22, -127.0), math.radians(-37.0), 0.045, ("sticky_notes",))
+LONG_TRAY = _tray("long_tray", _polar(0.31, -167.0), math.radians(-77.0), 0.12, 0.045, 0.025, 1,
                   ("scissors", "ruler", "stapler"))
 STATIONS = (PEN_CUP, MARKER_CUP, TAPE_PEG, TRAY, NOTE_MAT, LONG_TRAY)
 
@@ -253,18 +290,20 @@ def station_for(kind: str) -> Station:
     raise KeyError(f"No station accepts {kind!r}.")
 
 
-# Clutter fan in front of the arm (item centres), and the base to keep clear.
+# Clutter fan over the desk (item centres), centred on WORK_YAW_DEG, and the
+# base to keep clear.
 CLUTTER_RADIUS_M = (0.15, 0.38)  # Within the gamepad's 0.42 m workspace.
-CLUTTER_HALF_ANGLE_DEG = 55.0
-BASE_KEEPOUT_M = 0.10
+CLUTTER_HALF_ANGLE_DEG = 30.0
+BASE_KEEPOUT_M = 0.145  # The base plate is 20 cm square: this clears its corners.
 CLEARANCE_M = 0.006  # between items that may not touch
 STACK_GAP_M = 0.004  # drop height above whatever a stacked pen crosses
 MAX_STACK = 3  # layers in one pile
 
-# Parking: inactive items lie on the floor under the table, out of view.
+# Parking: inactive items lie on the floor behind the camera, in front of
+# the desk: out of reach and out of view.
 FLOOR_Z = -0.75  # As env/room.py.
-PARK_X = (-0.42, -0.05)
-PARK_Y = (-0.42, 0.42)
+PARK_X = (1.75, 2.55)
+PARK_Y = (-0.6, 0.6)
 
 
 # ----------------------------------------------------------- the appearance
@@ -459,18 +498,19 @@ def _station_shapes() -> list[_Shape]:
 
 def _sample_xy(rng: np.random.Generator) -> np.ndarray:
     r = rng.uniform(*CLUTTER_RADIUS_M)
-    a = math.radians(rng.uniform(-CLUTTER_HALF_ANGLE_DEG, CLUTTER_HALF_ANGLE_DEG))
+    a = math.radians(WORK_YAW_DEG + rng.uniform(-CLUTTER_HALF_ANGLE_DEG, CLUTTER_HALF_ANGLE_DEG))
     return np.array([r * math.cos(a), r * math.sin(a)])
 
 
 def _in_fan(xy: np.ndarray) -> bool:
     r = float(np.linalg.norm(xy))
-    a = math.degrees(math.atan2(xy[1], xy[0]))
+    a = math.degrees(math.atan2(xy[1], xy[0])) - WORK_YAW_DEG
+    a = (a + 180.0) % 360.0 - 180.0
     return CLUTTER_RADIUS_M[0] <= r <= CLUTTER_RADIUS_M[1] and abs(a) <= CLUTTER_HALF_ANGLE_DEG
 
 
 def park_pose(index: int, item: PoolItem) -> tuple[float, float, float]:
-    """A spot of its own on the floor under the table."""
+    """A spot of its own on the floor under the desk."""
     cols = 4
     row, col = divmod(index, cols)
     x = PARK_X[0] + (PARK_X[1] - PARK_X[0]) * (col + 0.5) / cols

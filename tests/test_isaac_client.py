@@ -211,7 +211,7 @@ def test_each_reset_relights_the_room(start_server):
         robot.disconnect()
     assert len(backend.lightings) == 2
     names = {s.name for s in backend.lightings[0]}
-    assert {"sun", "panel_00"} <= names
+    assert {"tube", "down_00"} <= names
     assert [s.temp_k for s in backend.lightings[0]] != [s.temp_k for s in backend.lightings[1]]
 
 
@@ -229,11 +229,11 @@ def test_same_seed_same_spawns(start_server):
 
 
 def test_desk_sort_scene(start_server):
-    backend, port = start_server(scene="desk_sort", cameras=("record", "overhead"))
-    robot = _robot(port, camera_names=("record", "overhead"))
+    backend, port = start_server(scene="desk_sort")
+    robot = _robot(port, camera_names=("record",))
     robot.connect()
     obs = robot.get_observation()
-    assert obs["overhead"].shape == (48, 64, 3)
+    assert obs["record"].shape == (48, 64, 3)
     robot.disconnect()
     assert backend.respawns == []
     (desk,) = backend.desks
@@ -245,7 +245,7 @@ def test_desk_sort_scene(start_server):
 
 def test_server_errors_reach_the_client(start_server):
     _, port = start_server()
-    robot = _robot(port, camera_names=("overhead",))  # The server renders only `record`.
+    robot = _robot(port, camera_names=("overhead",))  # The server has only `record`.
     robot.connect()
     try:
         with pytest.raises(ProtocolError, match="Unknown cameras"):

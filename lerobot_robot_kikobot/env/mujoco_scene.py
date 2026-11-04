@@ -1,4 +1,4 @@
-"""Builds the MuJoCo scenes: the arm, in the lab of `room.py`, with a task on its table.
+"""Builds the MuJoCo scenes: the arm, in the lab of `room.py`, with a task on its desk.
 
     spec = build_scene("pick_place")   # empty | pick_place | cylinder | desk_sort
     model = spec.compile()
@@ -24,20 +24,24 @@ from .room import LightState, Part, RoomSpec, lab_room, look_at_axes, texture_va
 SCENE_NAMES = ("empty", "pick_place", "cylinder", "desk_sort")
 TEXTURE_SIZE = 256
 
-# Relative light intensity (room.py) to MuJoCo's light colours. MuJoCo adds
-# lights linearly and clips, so six panels plus the sun stay well under 1.
-PANEL_DIFFUSE = 0.22
-# Each light also lifts the shadows a little, as light bouncing off the walls would.
-PANEL_AMBIENT = 0.035
-PANEL_SPECULAR = 0.05
-SUN_DIFFUSE = 0.45
-SUN_SPECULAR = 0.15
-PANEL_CUTOFF_DEG = 80.0
-# A shadow map spans the light's whole cone: the shadow-casting panel gets a
-# narrower one (it still covers the table), or its shadows come out jagged.
-SHADOW_PANEL_CUTOFF_DEG = 35.0
-# Soft shadow edges: the panel is a lamp this big, not a point.
-SHADOW_BULB_RADIUS_M = 0.12
+# Relative light intensity (room.py) to MuJoCo's light colours, per kind of
+# light. MuJoCo adds lights linearly (no fall-off with distance) and clips, so
+# eight downlights plus the tube stay well under 1 on the desk. The tube is
+# drawn as TUBE_SPOTS spot lights along its length.
+LIGHT_TERMS = {
+    # kind: (diffuse, specular, ambient: each light also lifts the shadows a
+    # little, as light bouncing off the walls would)
+    "downlight": (0.20, 0.04, 0.035),
+    "tube": (0.50, 0.10, 0.06),
+}
+DOWNLIGHT_CUTOFF_DEG = 75.0
+# A shadow map spans the light's whole cone: a shadow-casting downlight gets a
+# narrower one (it still covers the desk), or its shadows come out jagged.
+SHADOW_DOWNLIGHT_CUTOFF_DEG = 40.0
+TUBE_SPOTS = 3
+TUBE_CUTOFF_DEG = 70.0
+# Soft shadow edges: the lamp is this big, not a point.
+SHADOW_BULB_RADIUS_M = {"downlight": 0.06, "tube": 0.15}
 
 
 def _light_name(name: str) -> str:
@@ -54,7 +58,7 @@ def _add_materials(spec: mujoco.MjSpec, room: RoomSpec, textures: bool = True) -
         if not textures or not m.pattern or _texture_name(m) in made:
             continue
         made.add(_texture_name(m))
-        size = TEXTURE_SIZE * 2 if m.pattern == "wood" else TEXTURE_SIZE
+        size = TEXTURE_SIZE * 2 if m.pattern in ("wood", "laminate") else TEXTURE_SIZE
         gray = texture_values(desk_textures.PATTERNS[m.pattern](size), m.contrast)
         img = (gray * 255.0 + 0.5).astype(np.uint8)
         h, w = img.shape
@@ -77,40 +81,63 @@ def _add_materials(spec: mujoco.MjSpec, room: RoomSpec, textures: bool = True) -
             mat.texrepeat = [m.repeat, m.repeat]
 
 
+def prism_vertices(p: Part) -> np.ndarray:
+    """The corners of a prism part, about its centre."""
+    hy = p.half[1]
+    return np.array([(x, s * hy, z) for s in (-1.0, 1.0) for x, z in p.profile], dtype=float)
+
+
 def _add_part(spec: mujoco.MjSpec, p: Part) -> None:
+    extra = {}
     if p.shape == "box":
         kind, size = mujoco.mjtGeom.mjGEOM_BOX, list(p.half)
     elif p.shape == "cylinder":
         kind, size = mujoco.mjtGeom.mjGEOM_CYLINDER, [p.half[0], p.half[2], 0.0]
+    elif p.shape == "prism":
+        # A convex mesh: MuJoCo builds its hull from the corners.
+        mesh = spec.add_mesh(name=f"room_{p.name}_mesh")
+        mesh.uservert = prism_vertices(p).ravel().tolist()
+        kind, size = mujoco.mjtGeom.mjGEOM_MESH, [0.0, 0.0, 0.0]
+        extra["meshname"] = f"room_{p.name}_mesh"
     else:
         raise ValueError(f"Unknown part shape {p.shape!r}.")
     spec.worldbody.add_geom(
         name=f"room_{p.name}", type=kind, size=size, pos=list(p.center), material=f"room_{p.material}",
         contype=1 if p.collide else 0, conaffinity=1 if p.collide else 0,
-        friction=[1.2, 0.02, 0.002],
+        friction=[1.2, 0.02, 0.002], **extra,
     )
+
+
+def _spots(l) -> list[tuple[str, list[float], bool]]:
+    """MuJoCo lights for one room light: (name, position, casts a shadow).
+    A tube is a row of spots along Y; only the middle one casts a shadow."""
+    if l.kind != "tube":
+        return [(_light_name(l.name), list(l.pos), l.castshadow)]
+    out = []
+    for k in range(TUBE_SPOTS):
+        y = l.pos[1] + l.length * ((k + 0.5) / TUBE_SPOTS - 0.5)
+        out.append((f"{_light_name(l.name)}_{k}", [l.pos[0], y, l.pos[2]], l.castshadow and k == TUBE_SPOTS // 2))
+    return out
 
 
 def _add_lights(spec: mujoco.MjSpec, room: RoomSpec) -> None:
     for l in room.lights:
-        # MuJoCo's directional shadow map spreads too thin over a room this
-        # size (jagged, hard-edged shadows): its sun lights without one. The
-        # panel over the table casts the shadows here; Isaac's RTX keeps both.
-        light = spec.worldbody.add_light(name=_light_name(l.name), pos=list(l.pos), dir=list(l.dir),
-                                         castshadow=l.castshadow and l.kind != "sun")
-        if l.kind == "sun":
-            light.type = mujoco.mjtLightType.mjLIGHT_DIRECTIONAL
-            light.diffuse = [SUN_DIFFUSE * l.intensity] * 3
-            light.specular = [SUN_SPECULAR * l.intensity] * 3
-        else:
+        diffuse, specular, ambient = LIGHT_TERMS[l.kind]
+        spots = _spots(l)
+        share = l.intensity / len(spots)
+        for name, pos, shadow in spots:
+            light = spec.worldbody.add_light(name=name, pos=pos, dir=list(l.dir), castshadow=shadow)
             light.type = mujoco.mjtLightType.mjLIGHT_SPOT
-            light.cutoff = SHADOW_PANEL_CUTOFF_DEG if l.castshadow else PANEL_CUTOFF_DEG
-            if l.castshadow:
-                light.bulbradius = SHADOW_BULB_RADIUS_M
+            if l.kind == "tube":
+                light.cutoff = TUBE_CUTOFF_DEG
+            else:
+                light.cutoff = SHADOW_DOWNLIGHT_CUTOFF_DEG if shadow else DOWNLIGHT_CUTOFF_DEG
+            if shadow:
+                light.bulbradius = SHADOW_BULB_RADIUS_M[l.kind]
             light.exponent = 1.0
-            light.diffuse = [PANEL_DIFFUSE * l.intensity] * 3
-            light.specular = [PANEL_SPECULAR * l.intensity] * 3
-            light.ambient = [PANEL_AMBIENT * l.intensity] * 3
+            light.diffuse = [diffuse * share] * 3
+            light.specular = [specular * share] * 3
+            light.ambient = [ambient * share] * 3
 
 
 def _add_cameras(spec: mujoco.MjSpec, room: RoomSpec) -> None:
@@ -141,26 +168,26 @@ def _add_pick_place(spec: mujoco.MjSpec, cylinder: bool) -> None:
     if cylinder:
         # 30 mm across and 80 mm long, lying on its side. condim 6 adds rolling
         # friction, so a finger brushing it does not send it rolling off.
-        body = w.add_body(name="target_cylinder", pos=[0.25, 0.0, 0.015], quat=[math.sqrt(0.5), math.sqrt(0.5), 0.0, 0.0])
+        body = w.add_body(name="target_cylinder", pos=[-0.125, 0.217, 0.015], quat=[math.sqrt(0.5), math.sqrt(0.5), 0.0, 0.0])
         body.add_freejoint(name="target_cylinder_free")
         body.add_geom(name="target_cylinder", type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[0.015, 0.04, 0.0],
                       rgba=[0.95, 0.55, 0.1, 1.0], mass=0.03, friction=[1.5, 0.02, 0.002],
                       solref=[0.004, 1.0], condim=6)
     else:
         # A 32 mm cube: ~11 mm of approach clearance per side in the open jaws.
-        body = w.add_body(name="target_cube", pos=[0.25, 0.0, 0.016])
+        body = w.add_body(name="target_cube", pos=[-0.125, 0.217, 0.016])
         body.add_freejoint(name="target_cube_free")
         body.add_geom(name="target_cube", type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.016, 0.016, 0.016],
                       rgba=[0.85, 0.12, 0.12, 1.0], mass=0.03, friction=[1.5, 0.02, 0.002],
                       solref=[0.004, 1.0], condim=4)
     # The place target: a mocap body is moved by writing data.mocap_pos and still collides.
-    pad = w.add_body(name="place_pad", mocap=True, pos=[0.26, 0.22, 0.008])
+    pad = w.add_body(name="place_pad", mocap=True, pos=[-0.225, 0.13, 0.008])
     pad.add_geom(name="place_pad", type=mujoco.mjtGeom.mjGEOM_CYLINDER, size=[0.055, 0.008, 0.0],
                  rgba=[0.13, 0.72, 0.25, 1.0], friction=[1.5, 0.02, 0.002], condim=4)
 
 
 def build_scene(name: str, room: RoomSpec | None = None, textures: bool = True) -> mujoco.MjSpec:
-    """The arm in the lab, with the named task on its table.
+    """The arm in the lab, with the named task on its desk.
 
     `textures=False` leaves out the (in-memory) textures, so the spec can be
     written out as MJCF (`to_xml`) for an engine that imports MJCF, such as
@@ -215,25 +242,23 @@ class RoomLights:
     def __init__(self, model: mujoco.MjModel, room: RoomSpec):
         self.model = model
         self.kinds = {l.name: l.kind for l in room.lights}
-        self.ids = {}
+        self.ids: dict[str, list[int]] = {}
         for l in room.lights:
-            i = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_LIGHT, _light_name(l.name))
-            if i >= 0:
-                self.ids[l.name] = i
+            ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_LIGHT, name) for name, _, _ in _spots(l)]
+            ids = [i for i in ids if i >= 0]
+            if ids:
+                self.ids[l.name] = ids
 
     def apply(self, states: list[LightState]) -> None:
         m = self.model
         for s in states:
-            i = self.ids.get(s.name)
-            if i is None:
+            ids = self.ids.get(s.name)
+            if not ids:
                 continue
-            rgb = np.asarray(s.rgb) * s.intensity
-            sun = self.kinds[s.name] == "sun"
-            m.light_active[i] = s.on
-            m.light_diffuse[i] = rgb * (SUN_DIFFUSE if sun else PANEL_DIFFUSE)
-            m.light_specular[i] = rgb * (SUN_SPECULAR if sun else PANEL_SPECULAR)
-            if not sun:
-                m.light_ambient[i] = rgb * PANEL_AMBIENT
-            if sun:
-                d = np.asarray(s.dir, dtype=float)
-                m.light_dir[i] = d / np.linalg.norm(d)
+            diffuse, specular, ambient = LIGHT_TERMS[self.kinds[s.name]]
+            rgb = np.asarray(s.rgb) * s.intensity / len(ids)
+            for i in ids:
+                m.light_active[i] = s.on
+                m.light_diffuse[i] = rgb * diffuse
+                m.light_specular[i] = rgb * specular
+                m.light_ambient[i] = rgb * ambient

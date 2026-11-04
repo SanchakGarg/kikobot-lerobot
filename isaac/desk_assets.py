@@ -338,9 +338,9 @@ def _fit_asset(u: _Usd, xform_path: str, url: str, target_long: float):
 
 def build_desk(stage, pool, textures_dir: Path = DEFAULT_TEXTURES, catalog: dict[str, list[str]] | None = None,
                recolor_assets: bool = True) -> DeskScene:
-    """The stations and every pool item, on a stage that already has the table.
+    """The stations and every pool item, on a stage that already has the desk.
 
-    Items start parked under the table; the backend moves them per episode.
+    Items start parked on the floor; the backend moves them per episode.
     """
     import desk_layout as L  # noqa: PLC0415
     import desk_textures as T  # noqa: PLC0415
@@ -378,7 +378,7 @@ def build_desk(stage, pool, textures_dir: Path = DEFAULT_TEXTURES, catalog: dict
                 if recolor_assets:
                     u.bind(stage.GetPrimAtPath(f"{path}/asset"), body_mat, stronger=True)
         if source == "procedural":
-            parts = procedural_item(item.kind)
+            parts = procedural_item(item.kind, item.half)
             for j, (part, m) in enumerate(parts):
                 g = u.mesh(f"{path}/visual_{j}_{part}", m)
                 mat = {"body": body_mat, "accent": accent_mat}.get(part) or u.fixed(part)
@@ -386,7 +386,7 @@ def build_desk(stage, pool, textures_dir: Path = DEFAULT_TEXTURES, catalog: dict
 
         _add_colliders(u, path, item.kind, half, u.physics_material(_physics_name(item.kind)))
         P.RigidBodyAPI.Apply(root.GetPrim())
-        P.MassAPI.Apply(root.GetPrim()).CreateMassAttr(item.spec.mass)
+        P.MassAPI.Apply(root.GetPrim()).CreateMassAttr(item.mass)
 
         scene.pool.append(L.PoolItem(item.name, item.kind, tuple(half)))
         scene.paths[item.name] = path

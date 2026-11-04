@@ -45,7 +45,7 @@ class KikobotSimConfig(RobotConfig):
     # Seconds to wait for each server reply, and for the first one.
     timeout_s: float = 5.0
     connect_timeout_s: float = 10.0
-    # Cameras of the server's scene to observe: record (front) and/or overhead.
+    # Cameras of the server's scene to observe: the scene has one, `record`.
     # Not `cameras`: RobotConfig reserves that name for CameraConfig objects.
     camera_names: tuple[str, ...] = ("record",)
     # Offscreen framebuffer is capped at 1280x720 by the scene XML.

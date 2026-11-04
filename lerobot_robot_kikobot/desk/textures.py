@@ -103,6 +103,26 @@ def wood(size: int = 512, seed: int = 11) -> np.ndarray:
     return np.clip(0.35 + 0.65 * g, 0, 1)
 
 
+def laminate(size: int = 512, seed: int = 17) -> np.ndarray:
+    """Wood-effect desk laminate: fine, nearly straight grain running along v,
+    with a few darker growth lines and soft tone drifts. Tiles seamlessly."""
+    rng = np.random.default_rng(seed)
+    u, v = _uv(size)
+    warp = np.zeros_like(u)
+    for _ in range(5):  # Whole periods only, so the tile wraps.
+        f, ph, a = rng.integers(1, 4), rng.uniform(0, 2 * np.pi), rng.uniform(0.002, 0.008)
+        warp += a * np.sin(2 * np.pi * f * v + ph)
+    grain = 0.5 + 0.5 * np.sin(2 * np.pi * (u + warp) * 90)
+    lines = np.zeros_like(u)
+    for _ in range(14):
+        c, w = rng.uniform(0, 1), rng.uniform(0.0015, 0.004)
+        d = np.abs(((u + warp - c) + 0.5) % 1.0 - 0.5)
+        lines = np.maximum(lines, np.exp(-(d / w) ** 2) * rng.uniform(0.4, 1.0))
+    tone = 0.5 + 0.5 * np.sin(2 * np.pi * (2 * u + warp * 20) + 1.3)
+    g = 1.0 - 0.18 * grain**4 - 0.28 * lines - 0.12 * tone
+    return np.clip(g, 0, 1)
+
+
 PATTERNS = {
     "solid": solid,
     "stripes": stripes,
@@ -113,6 +133,7 @@ PATTERNS = {
     "checker": checker,
     "speckle": speckle,
     "wood": wood,
+    "laminate": laminate,
 }
 
 

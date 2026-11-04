@@ -1,15 +1,20 @@
 """The lab the arm works in, described once for both simulators.
 
 `lab_room()` lists every surface, light and camera of a makerspace: the
-arm's grey table, the floor, walls and ceiling, a window, a workbench with a
-pegboard, a steel shelving unit with bins, a whiteboard and a stool. The
+arm's study desk with its hutch (two side panels, a top shelf and a tube
+light under it), the floor, walls and ceiling with eight small downlights, a
+window, a workbench with a pegboard, a steel shelving unit with bins, a
+whiteboard and a stool. The
 MuJoCo server builds it with `env/mujoco_scene.py`, the Isaac Sim server
 with `isaac/room_usd.py`, so the two scenes have the same geometry, colours
 and lights. `sample_lighting` varies the light every reset.
 
-Frame: the arm's base sits on the tabletop at the origin, z = 0 is the top
-surface of the table, +X is the way the arm faces in its ready pose (the
-`record` camera looks back at it from there).
+Frame: the arm's base sits on the desktop at the origin, z = 0 is the top
+surface of the desk, +X is the way the arm faces in its ready pose. A person
+sits at the desk on its +X side, facing -X. The arm is in the desk's
+front-left corner: the desk runs back (-X, to the hutch) and right (+Y)
+from it. The `record` camera looks over the person's shoulder at the arm
+and the items around it.
 
 Pure numpy and the standard library, no package imports: the Isaac Sim
 server, which has no LeRobot, loads this file by path.
@@ -23,13 +28,29 @@ from dataclasses import dataclass
 import numpy as np
 
 # The room: x from ROOM_X[0] to ROOM_X[1], y +-ROOM_HALF_Y, floor to ceiling.
-FLOOR_Z = -0.75  # A 75 cm lab table.
+FLOOR_Z = -0.75  # A 75 cm desk.
 CEILING_Z = 2.25  # 3 m room.
 ROOM_X = (-2.2, 3.8)
 ROOM_HALF_Y = 2.5
 WALL_T = 0.05
-TABLE_HALF = 0.5  # The arm's table: 1.0 x 1.0 m, the same footprint as before.
-TABLE_TOP_T = 0.025
+# The desktop, 0.95 m deep (X) and 1.50 m wide (Y). The arm's base is in its
+# front-left corner, 30 cm in from both edges (room for the sorting stations
+# around it); its ~0.40 m reach leaves the back and the right of the desk out
+# of reach. The arm is turned so that its blind spot (where J1's +-165 degree
+# range runs out, around -70 degrees) points off the desk, between the front
+# and left edges: J1 sweeps over the whole desk without crossing it.
+DESK_X = (-0.65, 0.30)
+DESK_Y = (-0.30, 1.20)
+DESK_TOP_T = 0.025
+# The hutch: two side panels on the desk's left and right edges, a top shelf
+# across them that is shallower than the desk, and a tube light under it.
+HUTCH_PANEL_T = 0.018
+HUTCH_SHELF_Z = 0.75  # Underside of the top shelf, above the desktop.
+HUTCH_SHELF_DEPTH = 0.30
+HUTCH_SHELF_T = 0.02
+# The way the arm looks over the desk: the middle of the quarter between -X
+# and +Y. desk/layout.py keeps a copy (it cannot import this file).
+WORK_YAW_DEG = 135.0
 
 
 @dataclass(frozen=True)
@@ -50,29 +71,35 @@ class Material:
 
 @dataclass(frozen=True)
 class Part:
-    """One static solid. Boxes: `half` extents. Cylinders: (radius, radius, half height), along Z."""
+    """One static solid. Boxes: `half` extents. Cylinders: (radius, radius, half height), along Z.
+    Prisms: a convex polygon in the XZ plane (`profile`, (x, z) corners in
+    order, about `center`), extruded +-half[1] along Y; `half` is its
+    bounding box."""
 
     name: str
-    shape: str  # box | cylinder
+    shape: str  # box | cylinder | prism
     center: tuple[float, float, float]
     half: tuple[float, float, float]
     material: str
     collide: bool = True
+    profile: tuple[tuple[float, float], ...] = ()
 
 
 @dataclass(frozen=True)
 class Light:
-    """`panel`: a ceiling LED panel (`size` = half extents in x, y), shining down.
-    `sun`: daylight through the window, from `dir`. `intensity` is relative:
-    1.0 is a panel at full power; each simulator maps it to its own units."""
+    """`downlight`: a small round ceiling light (`radius`), shining down.
+    `tube`: a fluorescent-style tube light, `length` long along Y, shining
+    along `dir`. `intensity` is relative: 1.0 is a downlight at full power;
+    each simulator maps it to its own units."""
 
     name: str
-    kind: str  # panel | sun
+    kind: str  # downlight | tube
     pos: tuple[float, float, float]
     dir: tuple[float, float, float] = (0.0, 0.0, -1.0)
-    size: tuple[float, float] = (0.3, 0.3)
+    radius: float = 0.06
+    length: float = 0.0
     intensity: float = 1.0
-    temp_k: float = 5600.0  # Neutral white LED.
+    temp_k: float = 6000.0  # Cool white LED.
     castshadow: bool = False
 
 
@@ -110,15 +137,18 @@ class LightState:
 
 def _materials() -> dict[str, Material]:
     m = [
-        Material("table_top", (0.40, 0.41, 0.43), 0.55, 0.0, "speckle", 2.0, contrast=0.12),  # grey laminate
-        Material("table_frame", (0.22, 0.23, 0.25), 0.35, 0.8),
-        Material("table_shelf", (0.38, 0.39, 0.41), 0.6, 0.0, "speckle", 2.0, contrast=0.15),
+        Material("desk_wood", (0.62, 0.45, 0.30), 0.45, 0.0, "laminate", 1.0, contrast=0.8),  # walnut laminate
+        Material("desk_edge", (0.30, 0.21, 0.14), 0.45),  # edge banding
+        Material("desk_frame", (0.16, 0.16, 0.17), 0.4, 0.6),
+        Material("tube_housing", (0.92, 0.92, 0.90), 0.5),
+        Material("tube_glow", (1.0, 1.0, 1.0), 0.9, 0.0, None, 1.0, emission=1.0),
+        Material("downlight_trim", (0.95, 0.95, 0.94), 0.4),
         Material("floor", (0.45, 0.46, 0.48), 0.7, 0.0, "speckle", 1.0, contrast=0.3),  # grey epoxy
         Material("wall", (0.86, 0.86, 0.83), 0.9),
         Material("wall_band", (0.33, 0.34, 0.36), 0.7),
         Material("ceiling", (0.92, 0.92, 0.90), 0.95),
-        Material("panel", (1.0, 1.0, 0.98), 0.9, 0.0, None, 1.0, emission=1.0),
-        Material("window", (0.72, 0.84, 0.95), 0.1, 0.0, None, 1.0, emission=0.7),
+        Material("downlight", (1.0, 1.0, 1.0), 0.9, 0.0, None, 1.0, emission=1.0),
+        Material("window", (0.62, 0.70, 0.80), 0.1, 0.0, None, 1.0, emission=0.35),  # dusk outside
         Material("window_frame", (0.80, 0.80, 0.80), 0.4, 0.6),
         Material("bench_top", (0.66, 0.52, 0.36), 0.6, 0.0, "wood", 1.5, contrast=0.6),  # butcher block
         Material("bench_frame", (0.18, 0.19, 0.21), 0.4, 0.7),
@@ -150,20 +180,61 @@ def _cyl(name, center, radius, half_height, material, collide=True) -> Part:
     return Part(name, "cylinder", tuple(map(float, center)), (radius, radius, half_height), material, collide)
 
 
-def _table() -> list[Part]:
-    """The arm's grey lab table: laminate top, steel legs and aprons, a lower shelf."""
-    h = TABLE_HALF
-    leg_h = (-TABLE_TOP_T - FLOOR_Z) / 2  # Half the leg length, top to floor.
-    leg_z = FLOOR_Z + leg_h
-    parts = [_box("table_top", (0, 0, -TABLE_TOP_T / 2), (h, h, TABLE_TOP_T / 2), "table_top")]
+def _prism(name, profile_xz, y, half_y, material, collide=True) -> Part:
+    """A convex XZ polygon (absolute x, z corners), `half_y` thick about `y`."""
+    pts = np.asarray(profile_xz, float)
+    lo, hi = pts.min(0), pts.max(0)
+    c = 0.5 * (lo + hi)
+    rel = tuple((float(x - c[0]), float(z - c[1])) for x, z in pts)
+    return Part(name, "prism", (float(c[0]), float(y), float(c[1])),
+                (float(0.5 * (hi[0] - lo[0])), float(half_y), float(0.5 * (hi[1] - lo[1]))), material, collide, rel)
+
+
+def _desk() -> list[Part]:
+    """The arm's study desk: a laminate top on steel legs, a modesty panel, and
+    the hutch: two side panels that run the full depth of the desk at the
+    bottom and narrow to the top shelf's depth, the shelf, and a tube light
+    fitting under the shelf. The front of the desk is its +X edge."""
+    (x0, x1), (y0, y1) = DESK_X, DESK_Y
+    cx, cy = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
+    hx, hy = 0.5 * (x1 - x0), 0.5 * (y1 - y0)
+    t = DESK_TOP_T
+    leg_h = (-t - FLOOR_Z) / 2
+    parts = [
+        _box("desk_top", (cx, cy, -t / 2), (hx, hy, t / 2), "desk_wood"),
+        _box("desk_edge_front", (x1 + 0.001, cy, -t / 2), (0.001, hy, t / 2), "desk_edge", False),
+    ]
     for i, (sx, sy) in enumerate(((1, 1), (-1, 1), (1, -1), (-1, -1))):
-        parts.append(_box(f"table_leg{i}", (sx * (h - 0.04), sy * (h - 0.04), leg_z), (0.02, 0.02, leg_h), "table_frame"))
-    apron_z = -TABLE_TOP_T - 0.04
-    for i, s in enumerate((1, -1)):
-        parts.append(_box(f"table_apron_x{i}", (s * (h - 0.04), 0, apron_z), (0.015, h - 0.06, 0.04), "table_frame", False))
-        parts.append(_box(f"table_apron_y{i}", (0, s * (h - 0.04), apron_z), (h - 0.06, 0.015, 0.04), "table_frame", False))
-    parts.append(_box("table_shelf", (0, 0, FLOOR_Z + 0.18), (h - 0.06, h - 0.06, 0.01), "table_shelf"))
+        parts.append(_box(f"desk_leg{i}", (cx + sx * (hx - 0.03), cy + sy * (hy - 0.03), FLOOR_Z + leg_h),
+                          (0.02, 0.02, leg_h), "desk_frame"))
+    # Modesty panel at the back, under the top.
+    mz0, mz1 = FLOOR_Z + 0.3, -t
+    parts.append(_box("desk_modesty", (x0 + 0.04, cy, 0.5 * (mz0 + mz1)), (0.008, hy - 0.06, 0.5 * (mz1 - mz0)),
+                      "desk_wood", False))
+    # The hutch.
+    pt = HUTCH_PANEL_T
+    z_top = HUTCH_SHELF_Z + HUTCH_SHELF_T
+    side = ((x1, 0.0), (x0, 0.0), (x0, z_top), (x0 + HUTCH_SHELF_DEPTH, z_top))
+    parts.append(_prism("hutch_side_left", side, y0 + pt / 2, pt / 2, "desk_wood"))
+    parts.append(_prism("hutch_side_right", side, y1 - pt / 2, pt / 2, "desk_wood"))
+    sx1 = x0 + HUTCH_SHELF_DEPTH
+    parts.append(_box("hutch_shelf", (0.5 * (x0 + sx1), cy, HUTCH_SHELF_Z + HUTCH_SHELF_T / 2),
+                      (0.5 * HUTCH_SHELF_DEPTH, hy - pt, HUTCH_SHELF_T / 2), "desk_wood"))
+    # The tube light's fitting, near the shelf's front edge, and the glowing tube.
+    tl = _tube_light()
+    parts.append(_box("tube_housing", (tl.pos[0], cy, HUTCH_SHELF_Z - 0.012), (0.022, 0.5 * tl.length + 0.03, 0.012),
+                      "tube_housing", False))
+    parts.append(_box("tube_glow", (tl.pos[0], cy, tl.pos[2]), (0.012, 0.5 * tl.length, 0.012), "tube_glow", False))
     return parts
+
+
+def _tube_light() -> Light:
+    """Under the hutch's shelf, along Y, tilted a little towards the person."""
+    (x0, x1), (y0, y1) = DESK_X, DESK_Y
+    d = np.array([0.3, 0.0, -1.0])
+    d /= np.linalg.norm(d)
+    return Light("tube", "tube", (x0 + HUTCH_SHELF_DEPTH - 0.06, 0.5 * (y0 + y1), HUTCH_SHELF_Z - 0.036),
+                 tuple(float(v) for v in d), radius=0.012, length=1.2, intensity=1.0, temp_k=6500.0, castshadow=True)
 
 
 def _shell() -> list[Part]:
@@ -202,7 +273,7 @@ def _shell() -> list[Part]:
 
 
 def _workbench() -> list[Part]:
-    """Along the back wall, behind the arm: what the record camera sees."""
+    """Along the -X wall, behind the desk's hutch."""
     x0 = ROOM_X[0]
     top_z = FLOOR_Z + 0.9
     bx, bhx, bhy = x0 + 0.4, 0.35, 1.2
@@ -273,8 +344,8 @@ def _furniture() -> list[Part]:
         _box("whiteboard_frame_bottom", (0.1, wb_y + 0.004, FLOOR_Z + 0.9), (0.92, 0.012, 0.015), "whiteboard_frame", False),
         _box("whiteboard_tray", (0.1, wb_y + 0.04, FLOOR_Z + 0.89), (0.5, 0.04, 0.008), "whiteboard_frame", False),
     ]
-    # A lab stool beside the table, clear of the arm's reach.
-    stx, sty = -0.35, -1.05
+    # A lab stool, pushed aside to the left of the desk.
+    stx, sty = 0.9, -1.0
     seat_z = FLOOR_Z + 0.65
     parts += [
         _cyl("stool_seat", (stx, sty, seat_z), 0.17, 0.025, "stool_seat"),
@@ -285,51 +356,51 @@ def _furniture() -> list[Part]:
     return parts
 
 
+# Eight small downlights in two rows of four across the ceiling.
+DOWNLIGHT_X = (-1.45, 0.05, 1.55, 3.05)
+DOWNLIGHT_Y = (-1.25, 1.25)
+
+
 def _lights() -> list[Light]:
     lights = []
-    for i, x in enumerate((-1.0, 0.6, 2.2)):
-        for j, y in enumerate((-0.9, 0.9)):
-            lights.append(Light(f"panel_{i}{j}", "panel", (x, y, CEILING_Z - 0.012)))
-    # A task light over the arm's table, as labs have over a bench: it lights
-    # the work area most and casts the shadows that show where things are.
-    lights.append(Light("task", "panel", (0.1, 0.0, CEILING_Z - 0.012), size=(0.3, 0.15), intensity=1.4,
-                        castshadow=True))
-    # Daylight through the +Y window, slanting down into the room.
-    lights.append(Light("sun", "sun", (0.9, ROOM_HALF_Y, CEILING_Z), _sun_dir(0.0, 40.0), intensity=1.0, temp_k=5800.0, castshadow=True))
+    for i, x in enumerate(DOWNLIGHT_X):
+        for j, y in enumerate(DOWNLIGHT_Y):
+            # The one nearest the desk also casts shadows, as a real room's would.
+            lights.append(Light(f"down_{i}{j}", "downlight", (x, y, CEILING_Z - 0.012),
+                                castshadow=(i, j) == (1, 0)))
+    lights.append(_tube_light())
     return lights
 
 
-def _panel_parts(lights: list[Light]) -> list[Part]:
-    """The lit faces of the ceiling panels, so they show in the images."""
-    return [
-        _box(f"{l.name}_face", (l.pos[0], l.pos[1], CEILING_Z - 0.006), (l.size[0], l.size[1], 0.006), "panel", False)
-        for l in lights if l.kind == "panel"
-    ]
+def _light_parts(lights: list[Light]) -> list[Part]:
+    """The downlights' trims and glowing faces, so they show in the images."""
+    out = []
+    for l in lights:
+        if l.kind != "downlight":
+            continue
+        out.append(_cyl(f"{l.name}_trim", (l.pos[0], l.pos[1], CEILING_Z - 0.004), l.radius + 0.018, 0.004,
+                        "downlight_trim", False))
+        out.append(_cyl(f"{l.name}_face", (l.pos[0], l.pos[1], CEILING_Z - 0.009), l.radius, 0.0015,
+                        "downlight", False))
+    return out
+
+
+# The one camera: in front of the desk, over the shoulder of a person sitting
+# there, looking down at the arm and the items around it.
+RECORD_CAMERA = Camera("record", (0.65, 0.30, 0.80), (-0.06, 0.12, 0.0), (0.0, 0.0, 1.0), 40.0)
 
 
 def _cameras() -> list[Camera]:
-    return [
-        # In front of the table on +X, aimed at the arm's base.
-        Camera("record", (0.78, 0.0, 0.34), (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), 48.0),
-        # Straight down on the desk, top of the image towards +X.
-        Camera("overhead", (0.18, 0.0, 0.80), (0.18, 0.0, 0.0), (1.0, 0.0, 0.0), 50.0),
-    ]
+    return [RECORD_CAMERA]
 
 
 def lab_room() -> RoomSpec:
     lights = _lights()
-    parts = _table() + _shell() + _workbench() + _shelves() + _furniture() + _panel_parts(lights)
+    parts = _desk() + _shell() + _workbench() + _shelves() + _furniture() + _light_parts(lights)
     return RoomSpec(_materials(), tuple(parts), tuple(lights), tuple(_cameras()))
 
 
 # ----------------------------------------------------------------- lighting
-
-
-def _sun_dir(azimuth_deg: float, elevation_deg: float) -> tuple[float, float, float]:
-    """Direction the sunlight travels, coming in through the +Y window.
-    Azimuth 0 points straight across the room (-Y), positive swings it towards +X."""
-    az, el = math.radians(azimuth_deg), math.radians(elevation_deg)
-    return (math.cos(el) * math.sin(az), -math.cos(el) * math.cos(az), -math.sin(el))
 
 
 def kelvin_to_rgb(temp_k: float) -> tuple[float, float, float]:
@@ -357,28 +428,26 @@ def fixed_lighting(spec: RoomSpec) -> list[LightState]:
 def sample_lighting(rng: np.random.Generator, spec: RoomSpec) -> list[LightState]:
     """The room's light for one episode.
 
-    The panels share one colour temperature (one batch of LEDs), each varies a
-    little around a common dimmer level, and each may be off (at least two
-    stay on). The sun shines through the window on most episodes, from a
-    random angle.
+    The downlights share one colour temperature (one batch of LEDs), each
+    varies a little around a common dimmer level, and each may be off (at
+    least two stay on). The tube light under the hutch is on in most
+    episodes, a little brighter or dimmer each time.
     """
     level = rng.uniform(0.7, 1.3)
-    temp = rng.uniform(4300.0, 6500.0)
-    panels = [l for l in spec.lights if l.kind == "panel"]
-    on = rng.random(len(panels)) >= 0.1
+    temp = rng.uniform(5000.0, 6500.0)
+    downs = [l for l in spec.lights if l.kind == "downlight"]
+    on = rng.random(len(downs)) >= 0.1
     while on.sum() < 2:
-        on[rng.integers(len(panels))] = True
+        on[rng.integers(len(downs))] = True
     out = []
-    for l, is_on in zip(panels, on):
+    for l, is_on in zip(downs, on):
         out.append(LightState(l.name, bool(is_on), l.intensity * level * rng.uniform(0.9, 1.1),
                               kelvin_to_rgb(temp), temp, l.dir))
     for l in spec.lights:
-        if l.kind == "sun":
-            sun_temp = rng.uniform(5000.0, 6500.0)
-            out.append(LightState(
-                l.name, bool(rng.random() < 0.6), l.intensity * rng.uniform(0.6, 1.2),
-                kelvin_to_rgb(sun_temp), sun_temp, _sun_dir(rng.uniform(-40.0, 40.0), rng.uniform(20.0, 55.0)),
-            ))
+        if l.kind == "tube":
+            t = rng.uniform(6000.0, 7000.0)
+            out.append(LightState(l.name, bool(rng.random() < 0.85), l.intensity * rng.uniform(0.8, 1.2),
+                                  kelvin_to_rgb(t), t, l.dir))
     return out
 
 
@@ -399,5 +468,5 @@ def look_at_axes(eye, target, up) -> tuple[np.ndarray, np.ndarray]:
 __all__ = [
     "Camera", "Light", "LightState", "Material", "Part", "RoomSpec",
     "fixed_lighting", "kelvin_to_rgb", "lab_room", "look_at_axes", "sample_lighting", "texture_values",
-    "FLOOR_Z", "CEILING_Z", "ROOM_X", "ROOM_HALF_Y", "TABLE_HALF",
+    "FLOOR_Z", "CEILING_Z", "ROOM_X", "ROOM_HALF_Y", "DESK_X", "DESK_Y", "HUTCH_SHELF_Z", "WORK_YAW_DEG",
 ]

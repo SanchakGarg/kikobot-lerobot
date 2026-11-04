@@ -2,9 +2,10 @@
 
 The same surfaces, colours and lights as the MuJoCo scene (env/mujoco_scene.py):
 textured surfaces are UV-mapped box meshes with a hidden box collider, the
-rest plain cubes and cylinders; the ceiling panels are RectLights, the
-daylight a DistantLight, plus a faint DomeLight for the light that bounces
-around a real room. `RoomLightsUsd.apply` sets one episode's lighting.
+hutch's side panels convex meshes, the rest plain cubes and cylinders; the
+ceiling downlights are DiskLights, the hutch's tube light a CylinderLight,
+plus a faint DomeLight for the light that bounces around a real room.
+`RoomLightsUsd.apply` sets one episode's lighting.
 
 Loaded by the Isaac Sim server by path; the room description comes in as the
 module `kikobot_room`, the texture patterns as `desk_textures` (both loaded
@@ -18,29 +19,31 @@ from pathlib import Path
 
 import numpy as np
 
-# Relative light intensity (room.py) to Isaac Sim's units (nits for area
-# lights, lux-like for the distant light). `--light-scale` scales them all.
-PANEL_INTENSITY = 9000.0
-SUN_INTENSITY = 2500.0
+# Relative light intensity (room.py) to Isaac Sim's units (nits: these are
+# area lights, so a small one needs more). `--light-scale` scales them all.
+INTENSITY = {"downlight": 60000.0, "tube": 40000.0}
 DOME_INTENSITY = 120.0
 ROOT = "/World/Room"
 # Material binding purpose PhysX and Newton read friction from.
 PHYSICS_PURPOSE = "physics"
 
 
-def _quat_from_minus_z(d) -> tuple[float, float, float, float]:
-    """(w, x, y, z) turning a light's -Z (where USD lights shine) onto `d`."""
-    a = np.array([0.0, 0.0, -1.0])
-    b = np.asarray(d, dtype=float)
-    b = b / np.linalg.norm(b)
-    c = float(np.dot(a, b))
-    if c < -0.999999:
-        return (0.0, 1.0, 0.0, 0.0)  # Half a turn about X.
-    axis = np.cross(a, b)
-    w = 1.0 + c
-    q = np.array([w, *axis])
-    q /= np.linalg.norm(q)
-    return tuple(float(v) for v in q)
+def prism_mesh(p):
+    """A prism part (room.py) as polygons about its centre: the two end caps
+    and a quad per side, each wound to face outwards."""
+    hy = float(p.half[1])
+    prof = [(float(x), float(z)) for x, z in p.profile]
+    n = len(prof)
+    pts = np.array([(x, -hy, z) for x, z in prof] + [(x, hy, z) for x, z in prof])
+    faces = [list(range(n)), list(range(n, 2 * n))]
+    faces += [[i, (i + 1) % n, n + (i + 1) % n, n + i] for i in range(n)]
+    centre = pts.mean(0)
+    out = []
+    for f in faces:
+        q = pts[f]
+        normal = np.cross(q[1] - q[0], q[2] - q[0])
+        out.append(f if normal @ (q.mean(0) - centre) > 0 else f[::-1])
+    return [tuple(map(float, v)) for v in pts], [len(f) for f in out], [k for f in out for k in f]
 
 
 def box_mesh_uv(half, repeat: float):
@@ -75,7 +78,7 @@ def write_room_textures(room, folder: Path) -> dict[tuple[str, float], Path]:
             continue
         p = Path(folder) / f"{m.pattern}_{round(m.contrast * 100)}.png"
         if not p.is_file():
-            size = 512 if m.pattern == "wood" else 256
+            size = 512 if m.pattern in ("wood", "laminate") else 256
             T.write_png(p, R.texture_values(T.PATTERNS[m.pattern](size), m.contrast))
         out[(m.pattern, m.contrast)] = p
     return out
@@ -91,22 +94,16 @@ class RoomLightsUsd:
         self.paths = {l.name: f"{ROOT}/Lights/{l.name}" for l in room.lights}
 
     def apply(self, states) -> None:
-        from pxr import Gf, UsdGeom, UsdLux  # noqa: PLC0415
+        from pxr import UsdLux  # noqa: PLC0415
 
         for s in states:
             prim = self.stage.GetPrimAtPath(self.paths.get(s.name, ""))
             if not prim:
                 continue
             light = UsdLux.LightAPI(prim)
-            base = SUN_INTENSITY if self.kinds[s.name] == "sun" else PANEL_INTENSITY
+            base = INTENSITY[self.kinds[s.name]]
             light.GetIntensityAttr().Set(float(base * s.intensity * self.scale) if s.on else 0.0)
             light.GetColorTemperatureAttr().Set(float(s.temp_k))
-            if self.kinds[s.name] == "sun":
-                w, x, y, z = _quat_from_minus_z(s.dir)
-                orient = [op for op in UsdGeom.Xformable(prim).GetOrderedXformOps()
-                          if op.GetOpType() == UsdGeom.XformOp.TypeOrient]
-                if orient:
-                    orient[0].Set(Gf.Quatf(w, x, y, z))
 
 
 def build_room(stage, room, textures_dir: Path, light_scale: float = 1.0) -> RoomLightsUsd:
@@ -172,7 +169,21 @@ def build_room(stage, room, textures_dir: Path, light_scale: float = 1.0) -> Roo
     for p in room.parts:
         path = f"{ROOT}/Parts/{p.name}"
         m = room.materials[p.material]
-        if p.shape == "cylinder":
+        if p.shape == "prism":
+            pts, counts, idx = prism_mesh(p)
+            g = UsdGeom.Mesh.Define(stage, path)
+            g.CreatePointsAttr([Gf.Vec3f(*q) for q in pts])
+            g.CreateFaceVertexCountsAttr(counts)
+            g.CreateFaceVertexIndicesAttr(idx)
+            g.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+            arr = np.asarray(pts)
+            g.CreateExtentAttr([Gf.Vec3f(*arr.min(0)), Gf.Vec3f(*arr.max(0))])
+            UsdGeom.Xformable(g).AddTranslateOp().Set(Gf.Vec3d(*map(float, p.center)))
+            if p.collide:
+                UsdPhysics.CollisionAPI.Apply(g.GetPrim())
+                UsdPhysics.MeshCollisionAPI.Apply(g.GetPrim()).CreateApproximationAttr("convexHull")
+                bind(g.GetPrim(), friction, PHYSICS_PURPOSE)
+        elif p.shape == "cylinder":
             g = UsdGeom.Cylinder.Define(stage, path)
             g.CreateRadiusAttr(float(p.half[0]))
             g.CreateHeightAttr(2.0 * float(p.half[2]))
@@ -213,20 +224,20 @@ def build_room(stage, room, textures_dir: Path, light_scale: float = 1.0) -> Roo
     UsdGeom.Xform.Define(stage, f"{ROOT}/Lights")
     for l in room.lights:
         path = f"{ROOT}/Lights/{l.name}"
-        if l.kind == "sun":
-            light = UsdLux.DistantLight.Define(stage, path)
-            light.CreateAngleAttr(0.53)
-            base = SUN_INTENSITY
+        if l.kind == "tube":
+            light = UsdLux.CylinderLight.Define(stage, path)
+            light.CreateLengthAttr(float(l.length))
+            light.CreateRadiusAttr(float(l.radius))
             x = UsdGeom.Xformable(light)
-            x.AddOrientOp().Set(Gf.Quatf(*_quat_from_minus_z(l.dir)))
+            x.AddTranslateOp().Set(Gf.Vec3d(*map(float, l.pos)))
+            # A CylinderLight lies along its X axis: turn it onto Y.
+            x.AddRotateZOp().Set(90.0)
         else:
-            light = UsdLux.RectLight.Define(stage, path)
-            light.CreateWidthAttr(2.0 * l.size[0])
-            light.CreateHeightAttr(2.0 * l.size[1])
-            base = PANEL_INTENSITY
-            # A RectLight shines along its -Z: straight down from the ceiling.
+            light = UsdLux.DiskLight.Define(stage, path)
+            light.CreateRadiusAttr(float(l.radius))
+            # A DiskLight shines along its -Z: straight down from the ceiling.
             UsdGeom.Xformable(light).AddTranslateOp().Set(Gf.Vec3d(*map(float, l.pos)))
-        light.CreateIntensityAttr(float(base * l.intensity * light_scale))
+        light.CreateIntensityAttr(float(INTENSITY[l.kind] * l.intensity * light_scale))
         light.CreateEnableColorTemperatureAttr(True)
         light.CreateColorTemperatureAttr(float(l.temp_k))
         UsdLux.ShadowAPI.Apply(light.GetPrim()).CreateShadowEnableAttr(True)

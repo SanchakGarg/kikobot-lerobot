@@ -5,7 +5,7 @@
 Each kept episode is `<out>/raw/<task>/episode_XXXXX.npz`. Images are JPEG
 bytes, the rest float32 arrays at RECORD_HZ, one row per frame:
 
-    image, overhead_image    the `record` and `overhead` cameras
+    image                    the `record` camera
     joint_state   [T, 7]     J1..J6 (rad), gripper (0 closed .. 1 open)
     eef_state     [T, 7]     TCP x y z (m, base frame), roll pitch yaw (rad), gripper
     action_joint  [T, 7]     joint targets at the end of the frame, gripper target
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 RECORD_HZ = 10.0
 SETTLE_AFTER_S = 1.0
-CAMERAS = ("record", "overhead")
+CAMERAS = ("record",)
 CARRY_PHASES = ("carry_up", "carry", "align", "place")
 GRIP_CLOSED_BELOW = 5.0  # %: a target below this is "close the jaws"
 
@@ -53,7 +53,7 @@ class Episode:
     seed: int
     task: TaskSpec
     frames: dict[str, list] = field(default_factory=lambda: {
-        "image": [], "overhead_image": [], "joint_state": [], "eef_state": [], "tick": [],
+        "image": [], "joint_state": [], "eef_state": [], "tick": [],
     })
     # Every executed control tick: what was commanded.
     cmd_q: list[np.ndarray] = field(default_factory=list)
@@ -102,7 +102,6 @@ class Runner:
         imgs = w.render(self.cameras, self.size, self.size) if self.cameras else {}
         f = ep.frames
         f["image"].append(imgs.get("record"))
-        f["overhead_image"].append(imgs.get("overhead"))
         q = w.data.qpos[w._qpos_adr].copy()
         grip = w.state()["gripper.pos"] / 100.0
         pos, rot = self.expert.tcp_pose(q)
@@ -232,7 +231,6 @@ class Runner:
         }
         if self.cameras:
             out["image"] = np.asarray([encode_jpeg(i) for i in f["image"]], dtype=object)
-            out["overhead_image"] = np.asarray([encode_jpeg(i) for i in f["overhead_image"]], dtype=object)
         return out
 
 

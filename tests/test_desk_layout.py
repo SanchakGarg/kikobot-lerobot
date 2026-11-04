@@ -59,7 +59,7 @@ def test_one_placement_per_item_and_counts():
         assert 3 <= w <= 7 and 2 <= s <= 4
 
 
-def test_active_items_in_reach_and_parked_ones_under_the_table():
+def test_active_items_in_reach_and_parked_ones_out_of_the_way():
     _, layouts = _layouts()
     for lay in layouts:
         for p in lay:
@@ -146,21 +146,57 @@ def test_textures_are_valid_pngs(tmp_path):
         assert pattern.min() >= 0 and pattern.max() <= 1
 
 
-@pytest.mark.parametrize("kind", list(L.KINDS))
-def test_procedural_items_fit_their_colliders(kind):
+SIZES = [(kind, half) for kind, spec in L.KINDS.items() for half in spec.all_sizes()]
+
+
+@pytest.mark.parametrize(("kind", "half"), SIZES)
+def test_procedural_items_fit_their_colliders(kind, half):
     """Visual meshes sit on the desk where the collider does: same bottom, about the same size."""
-    half = np.array(L.KINDS[kind].half)
-    pts = np.concatenate([m.arrays()[0] for _, m in A.procedural_item(kind)])
+    half = np.array(half)
+    pts = np.concatenate([m.arrays()[0] for _, m in A.procedural_item(kind, tuple(half))])
     lo, hi = pts.min(0), pts.max(0)
     assert lo[2] == pytest.approx(-half[2], abs=0.0015)
     assert hi[0] - lo[0] == pytest.approx(2 * half[0], rel=0.08)
     assert np.all(hi - lo < 2 * half + 0.008)
 
 
+def test_every_size_is_workable():
+    """Each size fits the jaws, its station and the stations' rules."""
+    jaws = 0.0536
+    for kind, half in SIZES:
+        hx, hy, hz = half
+        st = L.station_for(kind)
+        if kind == "tape_roll":
+            assert 2 * hx <= 0.046, half  # Gripped round the rim, the jaws wide open.
+        elif kind not in ("scissors", "sticky_notes"):
+            assert 2 * hy + 0.016 <= jaws, (kind, half)  # Gripped across, with clearance.
+        if st.name == "supply_tray":
+            # Laid across one of its compartments.
+            assert 2 * hx < 2 * st.half[1] - 0.008 and 2 * hy < 2 * st.half[0] / 3 - 0.008, (kind, half)
+        elif st.name == "long_tray":
+            assert hx < st.half[0] - 0.01 and hy < st.half[1] - 0.004, (kind, half)
+        elif st.name == "note_mat":
+            assert max(hx, hy) < st.half[0], (kind, half)
+        elif st.name in ("pen_cup", "marker_cup"):
+            r_in = next(p for p in st.parts if p.name == "visual").half[0]
+            assert max(hy, hz) < r_in - 0.01, (kind, half)
+
+
+def test_pool_spreads_the_sizes():
+    pool = L.default_pool()
+    for kind, spec in L.KINDS.items():
+        have = {it.half for it in pool if it.kind == kind}
+        n = sum(it.kind == kind for it in pool)
+        assert len(have) == min(n, len(spec.all_sizes())), kind
+    big = max((it for it in pool if it.kind == "glue_stick"), key=lambda it: it.half[0])
+    small = min((it for it in pool if it.kind == "glue_stick"), key=lambda it: it.half[0])
+    assert big.mass > small.mass
+
+
 def test_meshes_face_outward():
     """Every face's winding agrees with its normals (no inside-out faces)."""
-    for kind in L.KINDS:
-        for _, m in A.procedural_item(kind):
+    for kind, half in SIZES:
+        for _, m in A.procedural_item(kind, half):
             pts, nrm, _, counts = m.arrays()
             i = 0
             for c in counts:
@@ -183,11 +219,29 @@ def test_asset_name_matching():
     assert A.rank("a/Axis_Aligned_Physics/x.usd") > A.rank("a/Axis_Aligned/x.usd")
 
 
-def test_stations_are_inside_the_table_and_reach():
+def test_stations_are_on_the_desk_and_in_reach():
+    from lerobot_robot_kikobot.env import room as R
+
+    (x0, x1), (y0, y1) = R.DESK_X, R.DESK_Y
     for st in L.STATIONS:
         r = math.hypot(*st.xy)
-        assert 0.15 < r < 0.33
-        assert all(abs(c) + max(st.half) < 0.5 for c in st.xy)
+        assert 0.15 < r < 0.33, st.name
+        # Every corner of its footprint on the desk, clear of the hutch's side panels.
+        c, s = math.cos(st.yaw), math.sin(st.yaw)
+        for a in (-1, 1):
+            for b in (-1, 1):
+                x = st.xy[0] + c * a * st.half[0] - s * b * st.half[1]
+                y = st.xy[1] + s * a * st.half[0] + c * b * st.half[1]
+                assert x0 + R.HUTCH_PANEL_T < x < x1 and y0 + R.HUTCH_PANEL_T < y < y1 - R.HUTCH_PANEL_T, st.name
+        # Not in the arm's blind spot, where J1 runs out of range.
+        assert not -100.0 < math.degrees(math.atan2(st.xy[1], st.xy[0])) < -40.0, st.name
+
+
+def test_layout_agrees_with_the_room():
+    from lerobot_robot_kikobot.env import room as R
+
+    assert L.WORK_YAW_DEG == R.WORK_YAW_DEG
+    assert L.FLOOR_Z == R.FLOOR_Z
 
 
 def test_every_kind_has_a_station():
