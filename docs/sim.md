@@ -67,11 +67,11 @@ lights.
 - A top shelf 30 cm deep, 75 cm above the desktop.
 - A tube light under the front edge of the shelf.
 
-The arm stands in the desk's **front-left corner**, 30 cm in from the front
-and left edges. Its reach of about 40 cm leaves the back and the right of
-the desk out of reach. The arm is turned so that its blind spot, where J1's
-±165° range runs out, points off the desk between the front and left edges.
-J1 can then sweep over the whole desk without crossing its limit.
+The arm stands **flush in the desk's front-left corner**: one edge of its
+20 cm base plate lies on the desk's front edge, and the other against the
+left side panel. In its rest pose it faces into the desk, and its blind spot
+(where J1's ±165° range runs out) points off the desk, at the person. Its
+reach of about 40 cm leaves the back and the right of the desk out of reach.
 
 Around the desk is a makerspace: a workbench with a pegboard and a
 3D printer, steel shelving with bins, a whiteboard, a window and a stool.
@@ -89,12 +89,16 @@ On every reset the light changes slightly:
 
 `--fixed-lighting` turns the variation off.
 
-**The camera.** There is one camera, `record`. It looks over the shoulder of
-a person sitting at the desk, down at the arm and the items around it
-(`RECORD_CAMERA` in `room.py`). To match it on the real desk, put a camera
-about 65 cm in front of the arm's base, 30 cm to its right and 80 cm above
-the desktop, aimed at a point 6 cm behind and 12 cm right of the base, with
-a 40° vertical field of view.
+**The camera.** There is one camera, `record` (`RECORD_CAMERA` in
+`room.py`). It sits low over the desk, on the diagonal through the arm's
+corner, and looks back at the arm across the items and stations. To match
+it on the real desk, measured from the centre of the arm's base, put the
+camera:
+- 58 cm to the right and 58 cm back (toward the hutch);
+- 34 cm above the desktop;
+- aimed at a point 7 cm right of, 7 cm behind and 10 cm above the base
+  centre;
+- with a 58° vertical field of view.
 
 ## 3. The scenes
 
@@ -111,21 +115,22 @@ home and the objects respawn (a new desk in `desk_sort`).
 ### The desk sorting station
 
 The stations and items are described once, in `lerobot_robot_kikobot/desk/`,
-and both simulators build them from that description. Directions below are
-as seen by the person sitting at the desk; the arm is in the front-left corner.
+and both simulators build them from that description. With the arm flush in
+the corner, its working patch of desk is small, so there are three stations,
+at its edges. Directions below are as seen by the person at the desk.
 
 | Station | Where, from the arm | For |
 |---|---|---|
-| **Tape peg** | in front, under the arm's ready pose | tape rolls: they drop over the post |
-| **Marker cup** (blue) | front-left | markers, highlighters |
-| **Supply tray**, 3 compartments | front-right | glue sticks, erasers, sharpeners, paper clip boxes |
-| **Pen cup** (black) | right | pens, pencils |
-| **Long tray** | behind | scissors, the ruler, the stapler |
-| **Note mat** | behind-left | sticky-note pads |
+| **Pen cup** | just to its right | pens, pencils, markers, highlighters |
+| **Tape peg** | further right, on the front edge | tape rolls: they drop over the post |
+| **Supply tray** | at the far edge of its reach, back-right | glue sticks, erasers, sharpeners, paper clip boxes, scissors, the ruler, the stapler |
 
-The clutter lies behind and to the right of the arm, in its reach. Each desk
-shows 3 to 7 writing tools and 2 to 4 other supplies, drawn from a pool of
-39 items.
+The clutter lies between the stations and the left side panel, within reach
+and kept clear of the panel. Each desk shows 2 to 4 writing tools and 1 or 2
+other supplies, drawn from a pool of 39 items.
+
+The scripted expert (`kikobot-datagen`) succeeds on about 70–100 % of desks
+for each task (pencils are the hardest).
 
 **Every item comes in real sizes.** Each kind exists in several real
 products' sizes, and the pool cycles through them, so every desk shows a
@@ -139,8 +144,8 @@ spread:
 | Highlighters | Pocket, standard, large |
 | Glue sticks | 8 g, 15 g, 21 g |
 | Tape rolls | 12 mm mini, 13 mm, 19 mm and 25 mm, all on a 25 mm core |
-| Scissors | 13, 14 and 17 cm |
-| Other items | Erasers, sticky-note pads (76 mm and 51 × 38 mm), standard and mini staplers, 15 and 20 cm rulers, paper clip boxes, single- and double-hole sharpeners |
+| Scissors | 13 and 14 cm |
+| Other items | Erasers, sticky-note pads (76 mm and 51 × 38 mm), standard and mini staplers, 15 cm rulers in two widths, paper clip boxes, single- and double-hole sharpeners |
 
 Every size fits the open jaws and its station. Mass scales with size.
 

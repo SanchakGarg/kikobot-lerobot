@@ -29,16 +29,17 @@ def test_desk_top_is_flush_with_the_arm_base_in_its_front_left_corner():
     lo, hi = _bounds(top)
     assert hi[2] == pytest.approx(0.0)
     assert np.allclose([lo[0], hi[0]], R.DESK_X) and np.allclose([lo[1], hi[1]], R.DESK_Y)
-    # The base is near the front (+X) and left (-Y) edges, and the desk
-    # reaches beyond the arm to the back and the right.
-    assert 0.2 <= R.DESK_X[1] <= 0.35 and 0.2 <= -R.DESK_Y[0] <= 0.35
-    assert -R.DESK_X[0] > REACH_M and R.DESK_Y[1] > REACH_M
+    # The base plate's edges on the front edge (-Y) and against the left side
+    # panel (-X); the desk runs on beyond the arm's reach to the right and back.
+    assert R.DESK_Y[0] == pytest.approx(-R.BASE_HALF)
+    assert R.DESK_X[0] + R.HUTCH_PANEL_T == pytest.approx(-R.BASE_HALF)
+    assert R.DESK_X[1] > REACH_M and R.DESK_Y[1] > REACH_M
 
 
 def test_hutch_shelf_is_shallower_than_the_desk_and_above_the_arm():
     shelf = next(p for p in LAB.parts if p.name == "hutch_shelf")
     lo, hi = _bounds(shelf)
-    assert hi[0] - lo[0] < 0.5 * (R.DESK_X[1] - R.DESK_X[0])
+    assert hi[1] - lo[1] < 0.5 * (R.DESK_Y[1] - R.DESK_Y[0])
     assert lo[2] >= REACH_TOP_M
     for side in ("hutch_side_left", "hutch_side_right"):
         p = next(q for q in LAB.parts if q.name == side)
@@ -58,13 +59,15 @@ def test_nothing_else_is_in_the_arms_way():
         assert np.hypot(*near) > REACH_M or lo[2] > REACH_TOP_M or hi[2] < 0.0, p.name
 
 
-def test_the_hutch_keeps_clear_of_the_base():
+def test_the_hutch_stands_beside_the_base_not_on_it():
     for p in LAB.parts:
         if not p.name.startswith(("hutch_", "tube_")):
             continue
         lo, hi = _bounds(p)
-        near = np.clip([0.0, 0.0], lo[:2], hi[:2])
-        assert np.hypot(*near) > 0.25, p.name
+        # Nothing of the hutch overlaps the base plate's square.
+        assert hi[0] <= -R.BASE_HALF + 1e-9 or lo[0] >= R.BASE_HALF or lo[2] > 0.5, p.name
+    left = next(p for p in LAB.parts if p.name == "hutch_side_left")
+    assert _bounds(left)[1][0] == pytest.approx(-R.BASE_HALF)  # flush against the plate
 
 
 def test_everything_is_inside_the_room_and_has_a_material():

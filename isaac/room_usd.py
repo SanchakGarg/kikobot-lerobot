@@ -31,10 +31,14 @@ PHYSICS_PURPOSE = "physics"
 def prism_mesh(p):
     """A prism part (room.py) as polygons about its centre: the two end caps
     and a quad per side, each wound to face outwards."""
-    hy = float(p.half[1])
-    prof = [(float(x), float(z)) for x, z in p.profile]
+    prof = [(float(a), float(z)) for a, z in p.profile]
     n = len(prof)
-    pts = np.array([(x, -hy, z) for x, z in prof] + [(x, hy, z) for x, z in prof])
+    if p.extrude == "x":
+        hx = float(p.half[0])
+        pts = np.array([(-hx, y, z) for y, z in prof] + [(hx, y, z) for y, z in prof])
+    else:
+        hy = float(p.half[1])
+        pts = np.array([(x, -hy, z) for x, z in prof] + [(x, hy, z) for x, z in prof])
     faces = [list(range(n)), list(range(n, 2 * n))]
     faces += [[i, (i + 1) % n, n + (i + 1) % n, n + i] for i in range(n)]
     centre = pts.mean(0)
@@ -230,8 +234,7 @@ def build_room(stage, room, textures_dir: Path, light_scale: float = 1.0) -> Roo
             light.CreateRadiusAttr(float(l.radius))
             x = UsdGeom.Xformable(light)
             x.AddTranslateOp().Set(Gf.Vec3d(*map(float, l.pos)))
-            # A CylinderLight lies along its X axis: turn it onto Y.
-            x.AddRotateZOp().Set(90.0)
+            # A CylinderLight lies along its X axis, as the tube does.
         else:
             light = UsdLux.DiskLight.Define(stage, path)
             light.CreateRadiusAttr(float(l.radius))

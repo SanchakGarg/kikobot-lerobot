@@ -245,6 +245,23 @@ def load_episode(path: Path) -> dict[str, np.ndarray]:
         return {k: z[k] for k in z.files}
 
 
+def scene_fingerprint() -> str:
+    """A short hash of everything that decides what an episode looks like:
+    the desk, its stations, the items and their sizes, the room and camera.
+    Episodes recorded with different ones must not be mixed in one folder."""
+    import hashlib  # noqa: PLC0415
+
+    from ..desk import layout as L  # noqa: PLC0415
+    from ..env import room as R  # noqa: PLC0415
+
+    desc = repr((L.STATIONS, L.KINDS, L.DEFAULT_COUNTS, R.DESK_X, R.DESK_Y, R.RECORD_CAMERA))
+    return hashlib.sha1(desc.encode()).hexdigest()[:12]
+
+
+class SceneChanged(RuntimeError):
+    pass
+
+
 def record_task(
     world, task: TaskSpec, out_dir: Path, episodes: int, seed_base: int = 0, image_size: int = 224,
     render: bool = True, max_attempts: int | None = None,
@@ -254,9 +271,15 @@ def record_task(
     raw.mkdir(parents=True, exist_ok=True)
     stats_path = raw / "stats.json"
     stats = json.loads(stats_path.read_text()) if stats_path.is_file() else {}
+    have = sorted(raw.glob("episode_*.npz"))
+    scene = scene_fingerprint()
+    if have and stats.get("scene") != scene:
+        raise SceneChanged(
+            f"{raw} holds {len(have)} episodes recorded with a different desk, camera or items "
+            f"(scene {stats.get('scene', 'from before this check')}, now {scene}). Record into a new --out "
+            f"folder, or delete {raw} to start this task over.")
     reasons = Counter(stats.get("failures", {}))
     attempts = int(stats.get("attempts", 0))
-    have = sorted(raw.glob("episode_*.npz"))
     kept = len(have)
     runner = Runner(world, task, image_size=image_size, render=render)
     max_attempts = max_attempts or 40 * episodes + 100
@@ -291,6 +314,7 @@ def _write_stats(path: Path, task, kept, attempts, reasons, world, image_size, s
     path.write_text(json.dumps({
         "task": task.name,
         "instruction": task.instruction,
+        "scene": scene_fingerprint(),
         "kept": kept,
         "attempts": attempts,
         "success_rate": round(kept / max(1, attempts), 4),

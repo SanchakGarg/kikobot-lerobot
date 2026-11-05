@@ -29,16 +29,16 @@ There are 12 tasks. Each is its own dataset, `kikobot_desk_<task>`, and
 |---|---|---|
 | `pen_to_pen_cup` | put the pen in the pen cup | grasped near one end, turned upright over the cup, lowered tip first |
 | `pencil_to_pen_cup` | put the pencil in the pen cup | 〃 |
-| `marker_to_marker_cup` | put the marker in the marker cup | 〃 |
-| `highlighter_to_marker_cup` | put the highlighter in the marker cup | 〃 |
+| `marker_to_pen_cup` | put the marker in the pen cup | 〃 |
+| `highlighter_to_pen_cup` | put the highlighter in the pen cup | 〃 |
 | `tape_roll_to_tape_peg` | hang the tape roll on the tape holder | carried level and dropped over the post |
-| `glue_stick_to_supply_tray` | put the glue stick in the supply tray | turned to lie across its compartment (the first) |
-| `eraser_to_supply_tray` | put the eraser in the supply tray | 〃 (second compartment) |
-| `sharpener_to_supply_tray` | put the pencil sharpener in the supply tray | 〃 (third) |
-| `paper_clip_box_to_supply_tray` | put the box of paper clips in the supply tray | 〃 (third) |
-| `scissors_to_long_tray` | put the scissors in the long tray | turned to lie along the tray |
-| `stapler_to_long_tray` | put the stapler in the long tray | 〃 |
-| `ruler_to_long_tray` | put the ruler in the long tray | 〃 |
+| `glue_stick_to_supply_tray` | put the glue stick in the supply tray | turned to lie along the tray |
+| `eraser_to_supply_tray` | put the eraser in the supply tray | 〃 |
+| `sharpener_to_supply_tray` | put the pencil sharpener in the supply tray | 〃 |
+| `paper_clip_box_to_supply_tray` | put the box of paper clips in the supply tray | 〃 |
+| `scissors_to_supply_tray` | put the scissors in the supply tray | 〃 |
+| `stapler_to_supply_tray` | put the stapler in the supply tray | 〃 |
+| `ruler_to_supply_tray` | put the ruler in the supply tray | 〃 |
 
 There is no task for the sticky-note pad. At 76 mm across, it is wider than
 the open jaws (53 mm).
@@ -240,7 +240,8 @@ At deployment the policy gives a 7-D EEF delta. Add it to the TCP pose, solve IK
 | `--engine newton: no CUDA GPU visible to Warp` | Not in a GPU job, or the MIG slice is not visible. Check `nvidia-smi -L` in the job log. |
 | `Command 'python3' is not permitted` | Run Python only inside `sbatch` or `srun`, never at the login shell. |
 | `only k/200 perfect episodes in N attempts` | The task gave up after 40 attempts per wanted episode. Read the failure counts in `stats.json`. The same counts help with tuning: `ik_*` means out of reach, `plan_arm_touched_other_item` means a crowded desk, and `slipped` or `grasp_missed` mean grip trouble. |
-| Fewer kept episodes on one task than on others | This is expected. Success rates per desk run from about 40 % (the marker cup, at the edge of the arm's reach) to 90 % (the stapler). Only kept episodes are saved. |
+| `holds N episodes recorded with a different desk, camera or items` | The scene changed since that folder was recorded (for example after a `git pull`), and old and new episodes must not be mixed in one dataset. Record into a new `--out` folder, or delete that task's `raw/<task>` folder. |
+| Fewer kept episodes on one task than on others | This is expected. Success rates per desk run from about 70 % (pencils into the cup) to 100 % (scissors, the tape peg). Only kept episodes are saved. |
 | Setup cannot reach PyPI | Build the venv where there is internet, with the same Python, and copy it to `~/projects/kikobot-venv`. |
 | `OOM` | Raise `--mem` in the script. Recording needs a few GB of host RAM, and conversion more for `kikobot_desk_all`. |
 

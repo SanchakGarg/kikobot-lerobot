@@ -11,10 +11,10 @@ and lights. `sample_lighting` varies the light every reset.
 
 Frame: the arm's base sits on the desktop at the origin, z = 0 is the top
 surface of the desk, +X is the way the arm faces in its ready pose. A person
-sits at the desk on its +X side, facing -X. The arm is in the desk's
-front-left corner: the desk runs back (-X, to the hutch) and right (+Y)
-from it. The `record` camera looks over the person's shoulder at the arm
-and the items around it.
+sits at the desk on its -Y side, facing +Y. The arm's base is flush in the
+desk's front-left corner: the desk runs right (+X) and back (+Y, to the
+hutch) from it. The `record` camera looks back at the arm along the
+corner's diagonal.
 
 Pure numpy and the standard library, no package imports: the Isaac Sim
 server, which has no LeRobot, loads this file by path.
@@ -33,24 +33,28 @@ CEILING_Z = 2.25  # 3 m room.
 ROOM_X = (-2.2, 3.8)
 ROOM_HALF_Y = 2.5
 WALL_T = 0.05
-# The desktop, 0.95 m deep (X) and 1.50 m wide (Y). The arm's base is in its
-# front-left corner, 30 cm in from both edges (room for the sorting stations
-# around it); its ~0.40 m reach leaves the back and the right of the desk out
-# of reach. The arm is turned so that its blind spot (where J1's +-165 degree
-# range runs out, around -70 degrees) points off the desk, between the front
-# and left edges: J1 sweeps over the whole desk without crossing it.
-DESK_X = (-0.65, 0.30)
-DESK_Y = (-0.30, 1.20)
+# The arm's square base plate: 20 cm across, centred on the origin.
+BASE_HALF = 0.10
+# The hutch's side panels are this thick.
+HUTCH_PANEL_T = 0.018
+# The desktop, 1.50 m wide (X) and 0.95 m deep (Y). The arm's base sits
+# right in its front-left corner: one edge of the base plate on the desk's
+# front edge (-Y), the other against the left side panel (-X). The arm faces
+# into the desk in its ready pose, its blind spot (where J1's +-165 degree
+# range runs out, around -70 degrees) points off the desk at the person, and
+# its ~0.40 m reach leaves the back and the right of the desk out of reach.
+DESK_X = (-BASE_HALF - HUTCH_PANEL_T, 1.40 - BASE_HALF - HUTCH_PANEL_T)
+DESK_Y = (-BASE_HALF, 0.95 - BASE_HALF)
 DESK_TOP_T = 0.025
 # The hutch: two side panels on the desk's left and right edges, a top shelf
 # across them that is shallower than the desk, and a tube light under it.
-HUTCH_PANEL_T = 0.018
 HUTCH_SHELF_Z = 0.75  # Underside of the top shelf, above the desktop.
 HUTCH_SHELF_DEPTH = 0.30
 HUTCH_SHELF_T = 0.02
-# The way the arm looks over the desk: the middle of the quarter between -X
-# and +Y. desk/layout.py keeps a copy (it cannot import this file).
-WORK_YAW_DEG = 135.0
+# The way the arm looks over the desk, where the clutter lies: between its
+# ready pose (+X, a little to the left) and the hutch (+Y). desk/layout.py
+# keeps a copy (it cannot import this file).
+WORK_YAW_DEG = 60.0
 
 
 @dataclass(frozen=True)
@@ -72,9 +76,10 @@ class Material:
 @dataclass(frozen=True)
 class Part:
     """One static solid. Boxes: `half` extents. Cylinders: (radius, radius, half height), along Z.
-    Prisms: a convex polygon in the XZ plane (`profile`, (x, z) corners in
-    order, about `center`), extruded +-half[1] along Y; `half` is its
-    bounding box."""
+    Prisms: a convex polygon (`profile`, corners in order, about `center`)
+    extruded along `extrude`: with "y", the polygon is in the XZ plane, its
+    points (x, z), extruded +-half[1]; with "x", in the YZ plane, (y, z),
+    extruded +-half[0]. `half` is its bounding box."""
 
     name: str
     shape: str  # box | cylinder | prism
@@ -83,12 +88,13 @@ class Part:
     material: str
     collide: bool = True
     profile: tuple[tuple[float, float], ...] = ()
+    extrude: str = "y"
 
 
 @dataclass(frozen=True)
 class Light:
     """`downlight`: a small round ceiling light (`radius`), shining down.
-    `tube`: a fluorescent-style tube light, `length` long along Y, shining
+    `tube`: a fluorescent-style tube light, `length` long along X, shining
     along `dir`. `intensity` is relative: 1.0 is a downlight at full power;
     each simulator maps it to its own units."""
 
@@ -180,21 +186,22 @@ def _cyl(name, center, radius, half_height, material, collide=True) -> Part:
     return Part(name, "cylinder", tuple(map(float, center)), (radius, radius, half_height), material, collide)
 
 
-def _prism(name, profile_xz, y, half_y, material, collide=True) -> Part:
-    """A convex XZ polygon (absolute x, z corners), `half_y` thick about `y`."""
-    pts = np.asarray(profile_xz, float)
+def _prism_x(name, profile_yz, x, half_x, material, collide=True) -> Part:
+    """A convex YZ polygon (absolute y, z corners), `half_x` thick about `x`."""
+    pts = np.asarray(profile_yz, float)
     lo, hi = pts.min(0), pts.max(0)
     c = 0.5 * (lo + hi)
-    rel = tuple((float(x - c[0]), float(z - c[1])) for x, z in pts)
-    return Part(name, "prism", (float(c[0]), float(y), float(c[1])),
-                (float(0.5 * (hi[0] - lo[0])), float(half_y), float(0.5 * (hi[1] - lo[1]))), material, collide, rel)
+    rel = tuple((float(y - c[0]), float(z - c[1])) for y, z in pts)
+    return Part(name, "prism", (float(x), float(c[0]), float(c[1])),
+                (float(half_x), float(0.5 * (hi[0] - lo[0])), float(0.5 * (hi[1] - lo[1]))), material, collide,
+                rel, "x")
 
 
 def _desk() -> list[Part]:
     """The arm's study desk: a laminate top on steel legs, a modesty panel, and
     the hutch: two side panels that run the full depth of the desk at the
     bottom and narrow to the top shelf's depth, the shelf, and a tube light
-    fitting under the shelf. The front of the desk is its +X edge."""
+    fitting under the shelf. The front of the desk is its -Y edge."""
     (x0, x1), (y0, y1) = DESK_X, DESK_Y
     cx, cy = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
     hx, hy = 0.5 * (x1 - x0), 0.5 * (y1 - y0)
@@ -202,38 +209,38 @@ def _desk() -> list[Part]:
     leg_h = (-t - FLOOR_Z) / 2
     parts = [
         _box("desk_top", (cx, cy, -t / 2), (hx, hy, t / 2), "desk_wood"),
-        _box("desk_edge_front", (x1 + 0.001, cy, -t / 2), (0.001, hy, t / 2), "desk_edge", False),
+        _box("desk_edge_front", (cx, y0 - 0.001, -t / 2), (hx, 0.001, t / 2), "desk_edge", False),
     ]
     for i, (sx, sy) in enumerate(((1, 1), (-1, 1), (1, -1), (-1, -1))):
         parts.append(_box(f"desk_leg{i}", (cx + sx * (hx - 0.03), cy + sy * (hy - 0.03), FLOOR_Z + leg_h),
                           (0.02, 0.02, leg_h), "desk_frame"))
     # Modesty panel at the back, under the top.
     mz0, mz1 = FLOOR_Z + 0.3, -t
-    parts.append(_box("desk_modesty", (x0 + 0.04, cy, 0.5 * (mz0 + mz1)), (0.008, hy - 0.06, 0.5 * (mz1 - mz0)),
+    parts.append(_box("desk_modesty", (cx, y1 - 0.04, 0.5 * (mz0 + mz1)), (hx - 0.06, 0.008, 0.5 * (mz1 - mz0)),
                       "desk_wood", False))
     # The hutch.
     pt = HUTCH_PANEL_T
     z_top = HUTCH_SHELF_Z + HUTCH_SHELF_T
-    side = ((x1, 0.0), (x0, 0.0), (x0, z_top), (x0 + HUTCH_SHELF_DEPTH, z_top))
-    parts.append(_prism("hutch_side_left", side, y0 + pt / 2, pt / 2, "desk_wood"))
-    parts.append(_prism("hutch_side_right", side, y1 - pt / 2, pt / 2, "desk_wood"))
-    sx1 = x0 + HUTCH_SHELF_DEPTH
-    parts.append(_box("hutch_shelf", (0.5 * (x0 + sx1), cy, HUTCH_SHELF_Z + HUTCH_SHELF_T / 2),
-                      (0.5 * HUTCH_SHELF_DEPTH, hy - pt, HUTCH_SHELF_T / 2), "desk_wood"))
+    side = ((y0, 0.0), (y1, 0.0), (y1, z_top), (y1 - HUTCH_SHELF_DEPTH, z_top))
+    parts.append(_prism_x("hutch_side_left", side, x0 + pt / 2, pt / 2, "desk_wood"))
+    parts.append(_prism_x("hutch_side_right", side, x1 - pt / 2, pt / 2, "desk_wood"))
+    sy0 = y1 - HUTCH_SHELF_DEPTH
+    parts.append(_box("hutch_shelf", (cx, 0.5 * (sy0 + y1), HUTCH_SHELF_Z + HUTCH_SHELF_T / 2),
+                      (hx - pt, 0.5 * HUTCH_SHELF_DEPTH, HUTCH_SHELF_T / 2), "desk_wood"))
     # The tube light's fitting, near the shelf's front edge, and the glowing tube.
     tl = _tube_light()
-    parts.append(_box("tube_housing", (tl.pos[0], cy, HUTCH_SHELF_Z - 0.012), (0.022, 0.5 * tl.length + 0.03, 0.012),
+    parts.append(_box("tube_housing", (cx, tl.pos[1], HUTCH_SHELF_Z - 0.012), (0.5 * tl.length + 0.03, 0.022, 0.012),
                       "tube_housing", False))
-    parts.append(_box("tube_glow", (tl.pos[0], cy, tl.pos[2]), (0.012, 0.5 * tl.length, 0.012), "tube_glow", False))
+    parts.append(_box("tube_glow", (cx, tl.pos[1], tl.pos[2]), (0.5 * tl.length, 0.012, 0.012), "tube_glow", False))
     return parts
 
 
 def _tube_light() -> Light:
-    """Under the hutch's shelf, along Y, tilted a little towards the person."""
+    """Under the hutch's shelf, along X, tilted a little towards the person."""
     (x0, x1), (y0, y1) = DESK_X, DESK_Y
-    d = np.array([0.3, 0.0, -1.0])
+    d = np.array([0.0, -0.3, -1.0])
     d /= np.linalg.norm(d)
-    return Light("tube", "tube", (x0 + HUTCH_SHELF_DEPTH - 0.06, 0.5 * (y0 + y1), HUTCH_SHELF_Z - 0.036),
+    return Light("tube", "tube", (0.5 * (x0 + x1), y1 - HUTCH_SHELF_DEPTH + 0.06, HUTCH_SHELF_Z - 0.036),
                  tuple(float(v) for v in d), radius=0.012, length=1.2, intensity=1.0, temp_k=6500.0, castshadow=True)
 
 
@@ -273,7 +280,7 @@ def _shell() -> list[Part]:
 
 
 def _workbench() -> list[Part]:
-    """Along the -X wall, behind the desk's hutch."""
+    """Along the -X wall, to the left of the desk."""
     x0 = ROOM_X[0]
     top_z = FLOOR_Z + 0.9
     bx, bhx, bhy = x0 + 0.4, 0.35, 1.2
@@ -345,7 +352,7 @@ def _furniture() -> list[Part]:
         _box("whiteboard_tray", (0.1, wb_y + 0.04, FLOOR_Z + 0.89), (0.5, 0.04, 0.008), "whiteboard_frame", False),
     ]
     # A lab stool, pushed aside to the left of the desk.
-    stx, sty = 0.9, -1.0
+    stx, sty = 0.45, -0.75
     seat_z = FLOOR_Z + 0.65
     parts += [
         _cyl("stool_seat", (stx, sty, seat_z), 0.17, 0.025, "stool_seat"),
@@ -385,9 +392,10 @@ def _light_parts(lights: list[Light]) -> list[Part]:
     return out
 
 
-# The one camera: in front of the desk, over the shoulder of a person sitting
-# there, looking down at the arm and the items around it.
-RECORD_CAMERA = Camera("record", (0.65, 0.30, 0.80), (-0.06, 0.12, 0.0), (0.0, 0.0, 1.0), 40.0)
+# The one camera: low over the desk, on the diagonal through the arm's
+# corner, looking back at the arm across the items it works on, with the
+# stations along both edges in view.
+RECORD_CAMERA = Camera("record", (0.58, 0.58, 0.34), (0.07, 0.07, 0.10), (0.0, 0.0, 1.0), 58.0)
 
 
 def _cameras() -> list[Camera]:

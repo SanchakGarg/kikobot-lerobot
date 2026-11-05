@@ -238,7 +238,7 @@ def test_desk_sort_scene(start_server):
     assert backend.respawns == []
     (desk,) = backend.desks
     assert len(desk) == len(backend.desk_pool)
-    assert sum(p.active for p in desk) >= 4  # at least 3 writing tools + 1 supply
+    assert sum(p.active for p in desk) >= 3  # at least 2 writing tools + 1 supply
     # The settle phase ran physics before the episode started.
     assert backend.steps >= round(srv.SETTLE_S / srv.PHYSICS_DT_S)
 

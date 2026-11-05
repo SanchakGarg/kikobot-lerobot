@@ -87,15 +87,13 @@ def test_peg_check():
     assert C.station_check(task, np.array([x, y, 0.07]), np.eye(3), half) == "not_down_on_peg"
 
 
-def test_tray_and_compartment_checks():
-    task = get_task("eraser")  # supply tray, compartment 1
+def test_tray_checks():
+    task = get_task("eraser")  # the supply tray, one compartment
     st = task.station_spec
     half = L.KINDS["eraser"].half
-    along = rot_z(st.yaw + math.pi / 2)  # across the tray: along a compartment
-    good = C.compartment_center(st, 1) + np.array([0, 0, 0.004 + half[2]])
+    along = rot_z(st.yaw)  # along the tray
+    good = C.compartment_center(st, 0) + np.array([0, 0, 0.004 + half[2]])
     assert C.station_check(task, good, along, half) is None
-    wrong = C.compartment_center(st, 0) + np.array([0, 0, 0.004 + half[2]])
-    assert C.station_check(task, wrong, along, half) == "wrong_compartment"
     assert C.station_check(task, good + [0.3, 0, 0], along, half) == "not_in_tray"
     assert C.station_check(task, good + [0, 0, 0.05], along, half) == "not_down_in_tray"
 
@@ -132,17 +130,19 @@ def world():
     return SimWorld("desk_sort", seed=0, engine="mujoco")
 
 
-@pytest.mark.parametrize("task", ["pen_to_pen_cup", "tape_roll_to_tape_peg", "eraser_to_supply_tray",
-                                  "ruler_to_long_tray"])
-def test_expert_does_the_task(world, task):
+@pytest.mark.parametrize("task", ["pen_to_pen_cup", "highlighter_to_pen_cup", "tape_roll_to_tape_peg",
+                                  "eraser_to_supply_tray", "ruler_to_supply_tray"])
+def test_expert_does_the_task_reliably(world, task):
+    """Most desks give a perfect episode: one in a dozen is not enough to record a dataset."""
     runner = Runner(world, get_task(task), render=False)
-    reasons = []
-    for seed in range(12):
+    reasons, episodes = [], []
+    for seed in range(6):
         try:
-            ep = runner.run(seed)
+            episodes.append(runner.run(seed))
         except (PlanError, EpisodeFailed) as exc:
             reasons.append(str(exc))
-            continue
+    assert len(episodes) >= 3, f"{task}: only {len(episodes)} perfect episodes in 6 desks: {reasons}"
+    for ep in episodes[:1]:
         arrays = runner.arrays(ep)
         n = len(arrays["joint_state"])
         assert 60 < n < 400
@@ -155,8 +155,6 @@ def test_expert_does_the_task(world, task):
         # The deltas take the measured TCP to the next one, give or take the servo lag.
         step = arrays["eef_state"][1:, :3] - arrays["eef_state"][:-1, :3]
         assert np.abs(step - arrays["action_delta"][:-1, :3]).max() < 0.01
-        return
-    pytest.fail(f"{task}: no perfect episode in 12 desks: {reasons}")
 
 
 def test_episode_round_trip(tmp_path):
@@ -247,3 +245,15 @@ def test_openvla_registry_lists_every_task():
     spec.loader.exec_module(mod)
     assert mod.TASKS == TASK_NAMES
     assert "kikobot_desk_all" in mod.DATASETS
+
+
+def test_recording_refuses_episodes_from_another_scene(tmp_path, world):
+    from lerobot_robot_kikobot.datagen.record import SceneChanged, record_task
+
+    task = get_task("tape_roll")
+    raw = tmp_path / "raw" / task.name
+    raw.mkdir(parents=True)
+    (raw / "episode_00000.npz").write_bytes(b"")  # Left by an older desk...
+    (raw / "stats.json").write_text('{"scene": "an-older-one", "attempts": 1}')
+    with pytest.raises(SceneChanged, match="different desk"):
+        record_task(world, task, tmp_path, episodes=2, render=False)

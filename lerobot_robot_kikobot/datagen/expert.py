@@ -70,6 +70,7 @@ PRE_PLACE_CLEAR_M = 0.012  # Lowest point of the carried item above the station,
 RING_DROP_M = 0.006  # The tape roll is let go this far above the peg's post.
 HUB_RADIUS_M = (0.24, 0.30)  # Where the carry rises to, from the arm's base.
 TRANSIT_MIN_TCP_Z = 0.09
+APPROACH_HOVER_Z = 0.19  # The TCP crosses over to an item this high: fingertips above the cups' rims.
 
 MAX_GRASP_TRIES = 6
 MAX_PLACE_TRIES = 4
@@ -451,7 +452,22 @@ class Expert:
         q_pre = P.solve(pre, rot, seed=q_grasp)
         if q_pre is None:
             raise PlanError("ik_pregrasp")
-        q = P.joints(plan, q_start, q_pre, 100.0, opening, "approach")
+        # Over the top: up to a hover high enough to clear the cups, across,
+        # then straight down onto the pregrasp. A direct joint-space sweep
+        # from the ready pose passes low over whatever stands in between.
+        # Where that cannot be followed smoothly, the direct sweep instead.
+        hover = np.array([pre[0], pre[1], max(pre[2], APPROACH_HOVER_Z)])
+        q_hover = P.solve(hover, rot, seed=q_pre) if hover[2] > pre[2] + 1e-4 else None
+        q = None
+        if q_hover is not None:
+            try:
+                q = P.joints(plan, q_start, q_hover, 100.0, opening, "approach",
+                             min_tcp_z=min(hover[2], self.tcp_pose(q_start)[0][2]) - 0.01)
+                q = P.line(plan, q, (hover, rot), (pre, rot), opening, opening, "approach", v_lin=V_TRANSIT * 0.7)
+            except PlanError:
+                plan, q = Plan(), None
+        if q is None:
+            q = P.joints(plan, q_start, q_pre, 100.0, opening, "approach")
         q = P.line(plan, q, (pre, rot), (pos, rot), opening, opening, "descend", v_lin=V_APPROACH)
         P.hold(plan, q, opening, 0.0, 0.7, "close")
         lift = np.array([pos[0], pos[1], max(LIFT_TCP_Z, pos[2] + 0.06)])
@@ -510,14 +526,14 @@ class Expert:
             s_low = -1.0 if grip_in_item[0] > 0 else 1.0
             low_h = _horizontal(s_low * x0)  # Where the low end points now, flat.
             tip_z = CUP_TIP_Z
-            for tilt_deg in (90.0, 80.0, 70.0):
+            for tilt_deg in (90.0, 80.0, 70.0, 60.0):
                 th = math.radians(tilt_deg)
                 drift = (rim - tip_z) / math.tan(th) if tilt_deg < 90.0 else 0.0
                 if 0.5 * drift + radius > r_in - 0.008:
                     continue
                 low0 = math.cos(th) * low_h - math.sin(th) * UP
                 tilted = rot_between(s_low * x0, low0) @ item_rot0
-                for psi in np.linspace(-math.pi, math.pi, 12, endpoint=False):
+                for psi in np.linspace(-math.pi, math.pi, 24, endpoint=False):
                     spin = rot_z(psi)
                     low_dir = spin @ low0
                     horiz = _horizontal(low_dir)

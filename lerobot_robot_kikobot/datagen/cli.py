@@ -61,7 +61,7 @@ def cmd_tasks(args) -> None:
 
 def cmd_record(args) -> None:
     from ..sim_server import SimWorld
-    from .record import record_task
+    from .record import SceneChanged, record_task
 
     render = not args.no_render
     _check_backends(args.engine, args.renderer, render)
@@ -73,8 +73,11 @@ def cmd_record(args) -> None:
     for i, name in enumerate(_tasks_arg(args.task)):
         # Each task its own seed range, so the tasks' desks differ.
         seed_base = args.seed_base + 1_000_000 * TASK_NAMES.index(name)
-        stats = record_task(world, get_task(name), out, args.episodes, seed_base=seed_base,
-                            image_size=args.image_size, render=render, max_attempts=args.max_attempts)
+        try:
+            stats = record_task(world, get_task(name), out, args.episodes, seed_base=seed_base,
+                                image_size=args.image_size, render=render, max_attempts=args.max_attempts)
+        except SceneChanged as exc:
+            raise SystemExit(str(exc)) from None
         summary[name] = stats
         logger.info("%s: %d kept of %d attempts (%.0f %%).", name, stats["kept"], stats["attempts"],
                     100 * stats["success_rate"])

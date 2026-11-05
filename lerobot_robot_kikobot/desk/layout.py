@@ -87,9 +87,9 @@ KINDS: dict[str, KindSpec] = {
     # 33 mm, 19 mm x 44 mm (the classic desk roll) and 25 mm x 46 mm.
     "tape_roll": KindSpec("ring", (0.022, 0.022, 0.0065), 0.030, 1.0, ring_inner=0.0125,
                           sizes=((0.0165, 0.0165, 0.006), (0.022, 0.022, 0.0095), (0.023, 0.023, 0.0125))),
-    # Scissors lying flat: blades + handle loops, 14 cm; 13 cm kids'; 17 cm office.
+    # Scissors lying flat: blades + handle loops, 14 cm; 13 cm kids'.
     "scissors": KindSpec("scissors", (0.070, 0.022, 0.004), 0.040, 0.6,
-                         sizes=((0.065, 0.020, 0.004), (0.085, 0.022, 0.0045))),
+                         sizes=((0.065, 0.020, 0.004),)),
     # Block eraser, 44 x 22 x 12 mm; 40 x 20 x 12 mm; a 60 x 25 x 13 mm one.
     "eraser": KindSpec("box", (0.022, 0.011, 0.006), 0.010, 1.2,
                        sizes=((0.020, 0.010, 0.006), (0.030, 0.0125, 0.0065))),
@@ -99,9 +99,9 @@ KINDS: dict[str, KindSpec] = {
     # Desk stapler, 13 cm x 36 mm x 44 mm; a mini one, 10 cm x 29 x 34 mm.
     "stapler": KindSpec("box", (0.065, 0.018, 0.022), 0.150, 0.8,
                         sizes=((0.050, 0.0145, 0.017),)),
-    # Ruler, 20 cm or 15 cm, 30 / 25 mm wide, 4 mm thick.
-    "ruler": KindSpec("box", (0.100, 0.015, 0.002), 0.012, 0.7,
-                      sizes=((0.075, 0.0125, 0.002),)),
+    # A 15 cm ruler, 25 mm wide, 4 mm thick; a 15 cm one, 30 mm wide.
+    "ruler": KindSpec("box", (0.075, 0.0125, 0.002), 0.009, 0.7,
+                      sizes=((0.075, 0.015, 0.002),)),
     # Box of paper clips: 50 x 36 x 24 mm; small 40 x 30 x 20 mm; large 56 x 37 x 26 mm.
     "paper_clip_box": KindSpec("box", (0.025, 0.018, 0.012), 0.030, 0.9,
                                sizes=((0.020, 0.015, 0.010), (0.028, 0.0185, 0.013))),
@@ -262,24 +262,21 @@ def _pad_zone(name, xy, yaw, h, accepts) -> Station:
 
 
 # The way the arm looks over the desk from its corner, as env/room.py's
-# WORK_YAW_DEG: the middle of the quarter between -X and +Y.
-WORK_YAW_DEG = 135.0
+# WORK_YAW_DEG: where the clutter lies.
+WORK_YAW_DEG = 60.0
 
-# Around the arm, inside its reach and on the desk, clear of the clutter fan
-# that opens towards WORK_YAW_DEG and of the arm's blind spot (between about
-# -90 and -50 degrees, where J1 runs out, which points off the desk): along
-# the front edge the marker cup, the tape peg (under the ready pose, where
-# only a low station may be) and the supply tray, the pen cup to the arm's
-# right, and in the back-left corner the note mat and the long tray.
-PEN_CUP = _cup("pen_cup", _polar(0.265, 90.0), 0.038, 0.095, ("pen", "pencil"))
-MARKER_CUP = _cup("marker_cup", _polar(0.235, -33.0), 0.042, 0.085, ("marker", "highlighter"), role="cup_blue")
-TAPE_PEG = _peg("tape_peg", _polar(0.23, 19.0), ("tape_roll",))
-TRAY = _tray("supply_tray", _polar(0.31, 54.0), math.radians(54.0), 0.095, 0.060, 0.03, 3,
-             ("glue_stick", "eraser", "sharpener", "paper_clip_box"))
-NOTE_MAT = _pad_zone("note_mat", _polar(0.22, -127.0), math.radians(-37.0), 0.045, ("sticky_notes",))
-LONG_TRAY = _tray("long_tray", _polar(0.31, -167.0), math.radians(-77.0), 0.12, 0.045, 0.025, 1,
-                  ("scissors", "ruler", "stapler"))
-STATIONS = (PEN_CUP, MARKER_CUP, TAPE_PEG, TRAY, NOTE_MAT, LONG_TRAY)
+# The arm's base is flush in the desk's front-left corner (env/room.py), so
+# its working patch of desk is small: three stations, at its edges. The cup
+# (every writing tool) stands just in front of the arm, where it can lower a
+# pen upright into it, the tape peg beside it on the front edge, and the
+# tray (every other supply) on the far edge of the arm's reach. The clutter
+# lies between them and the left side panel.
+PEN_CUP = _cup("pen_cup", (0.219, 0.019), 0.045, 0.095, ("pen", "pencil", "marker", "highlighter"))
+TAPE_PEG = _peg("tape_peg", (0.307, -0.043), ("tape_roll",))
+TRAY = _tray("supply_tray", (0.199, 0.237), math.radians(140.0), 0.095, 0.060, 0.03, 1,
+             ("glue_stick", "eraser", "sharpener", "paper_clip_box", "scissors", "ruler", "stapler",
+              "sticky_notes"))
+STATIONS = (PEN_CUP, TAPE_PEG, TRAY)
 
 
 def station_for(kind: str) -> Station:
@@ -290,20 +287,29 @@ def station_for(kind: str) -> Station:
     raise KeyError(f"No station accepts {kind!r}.")
 
 
-# Clutter fan over the desk (item centres), centred on WORK_YAW_DEG, and the
-# base to keep clear.
-CLUTTER_RADIUS_M = (0.15, 0.38)  # Within the gamepad's 0.42 m workspace.
-CLUTTER_HALF_ANGLE_DEG = 30.0
+# Clutter: item centres in this fan about WORK_YAW_DEG, wide enough to take
+# in all of the desk the arm reaches, and every item wholly on the desk
+# (DESK_X / DESK_Y, as env/room.py's). The base is kept clear, and items
+# lie no nearer than the arm can grasp.
+CLUTTER_RADIUS_M = (0.20, 0.37)
+CLUTTER_HALF_ANGLE_DEG = 60.0
+REQUIRED_MAX_R_M = 0.35  # A task's required item lies well inside the arm's 0.40 m reach.
+DESK_X = (-0.118, 1.282)
+DESK_Y = (-0.1, 0.85)
+DESK_MARGIN_M = 0.012
+# The left side panel stands tall beside the arm: the clutter keeps this far
+# from it, so the arm never has to reach down along it.
+PANEL_CLEARANCE_M = 0.13
 BASE_KEEPOUT_M = 0.145  # The base plate is 20 cm square: this clears its corners.
 CLEARANCE_M = 0.006  # between items that may not touch
 STACK_GAP_M = 0.004  # drop height above whatever a stacked pen crosses
 MAX_STACK = 3  # layers in one pile
 
-# Parking: inactive items lie on the floor behind the camera, in front of
-# the desk: out of reach and out of view.
+# Parking: inactive items lie on the floor beyond the desk's right end, out
+# of reach and out of view.
 FLOOR_Z = -0.75  # As env/room.py.
-PARK_X = (1.75, 2.55)
-PARK_Y = (-0.6, 0.6)
+PARK_X = (1.6, 2.4)
+PARK_Y = (-0.5, 0.7)
 
 
 # ----------------------------------------------------------- the appearance
@@ -496,10 +502,17 @@ def _station_shapes() -> list[_Shape]:
     return out
 
 
-def _sample_xy(rng: np.random.Generator) -> np.ndarray:
-    r = rng.uniform(*CLUTTER_RADIUS_M)
+def _sample_xy(rng: np.random.Generator, r_max: float | None = None) -> np.ndarray:
+    r = rng.uniform(CLUTTER_RADIUS_M[0], r_max or CLUTTER_RADIUS_M[1])
     a = math.radians(WORK_YAW_DEG + rng.uniform(-CLUTTER_HALF_ANGLE_DEG, CLUTTER_HALF_ANGLE_DEG))
     return np.array([r * math.cos(a), r * math.sin(a)])
+
+
+def _on_desk(p0, p1, radius: float) -> bool:
+    """A footprint (capsule p0-p1, radius) wholly on the desk, clear of the left side panel."""
+    lo_x, hi_x = DESK_X[0] + 0.018 + PANEL_CLEARANCE_M + radius, DESK_X[1] - DESK_MARGIN_M - radius
+    lo_y, hi_y = DESK_Y[0] + DESK_MARGIN_M + radius, DESK_Y[1] - DESK_MARGIN_M - radius
+    return all(lo_x <= p[0] <= hi_x and lo_y <= p[1] <= hi_y for p in (p0, p1))
 
 
 def _in_fan(xy: np.ndarray) -> bool:
@@ -521,8 +534,43 @@ def park_pose(index: int, item: PoolItem) -> tuple[float, float, float]:
 def sample_desk(
     rng: np.random.Generator,
     pool: list[PoolItem],
-    n_writing: tuple[int, int] = (3, 7),
-    n_supplies: tuple[int, int] = (2, 4),
+    n_writing: tuple[int, int] = (2, 4),
+    n_supplies: tuple[int, int] = (1, 2),
+    stack_p: float = 0.2,
+    tries: int = 200,
+    require: tuple[str, ...] | None = None,
+    attempts: int = 20,
+) -> list[Placement]:
+    """Which items are on the desk this episode, their poses and their looks.
+
+    Returns one Placement per pool item, in pool order. Inactive items get a
+    parking pose. `stack_p` is the chance that a pen-like item is dropped onto
+    pens already placed instead of onto a clear patch of desk. `require`:
+    kinds of which at least one item must be on the desk; each is placed
+    before anything else, within easy reach, on a clear patch of desk (later
+    pens may still land on it). A desk that could not fit the fewest items
+    asked for, or a required one, is drawn again (from the same generator, so
+    the same seed gives the same desk).
+    """
+    best, best_n = None, -1
+    for _ in range(attempts):
+        out = _sample_desk_once(rng, pool, n_writing, n_supplies, stack_p, tries, require)
+        w = sum(p.active and KINDS[p.kind].writing for p in out)
+        s = sum(p.active and not KINDS[p.kind].writing for p in out)
+        have = {p.kind for p in out if p.active}
+        if (w >= min(n_writing[0], sum(KINDS[i.kind].writing for i in pool)) and s >= n_supplies[0]
+                and all(k in have for k in require or ())):
+            return out
+        if w + s > best_n:
+            best, best_n = out, w + s
+    return best
+
+
+def _sample_desk_once(
+    rng: np.random.Generator,
+    pool: list[PoolItem],
+    n_writing: tuple[int, int] = (2, 4),
+    n_supplies: tuple[int, int] = (1, 2),
     stack_p: float = 0.2,
     tries: int = 200,
     require: tuple[str, ...] | None = None,
@@ -565,18 +613,27 @@ def sample_desk(
     def look(i):
         return sample_look(rng, pool[i].kind)
 
-    # Bulky supplies first, so pens pile up in the gaps between them.
-    for i in chosen_s:
+    def place_clear(i: int, n_tries: int, r_max: float | None, writing: bool) -> None:
         it = pool[i]
         half_len, radius = it.footprint()
-        for _ in range(tries):
-            xy, yaw = _sample_xy(rng), float(rng.uniform(-math.pi, math.pi))
+        for _ in range(n_tries):
+            xy, yaw = _sample_xy(rng, r_max), float(rng.uniform(-math.pi, math.pi))
             p0, p1 = _segment(xy, yaw, half_len)
-            shape = _Shape(it.name, p0, p1, radius, 2 * it.half[2], False, 0)
-            if all(shape.gap(o) >= CLEARANCE_M for o in placed):
+            shape = _Shape(it.name, p0, p1, radius, 2 * it.half[2], writing and it.name not in keep_clear, 0)
+            if _on_desk(p0, p1, radius) and all(shape.gap(o) >= CLEARANCE_M for o in placed):
                 placed.append(shape)
                 out[i] = Placement(it.name, it.kind, True, (float(xy[0]), float(xy[1]), it.half[2]), yaw, **look(i))
-                break
+                return
+
+    # The required items first, anywhere they fit within easy reach; then
+    # the bulky supplies, so pens pile up in the gaps between them.
+    first = [i for i in chosen_w[:1] + chosen_s[:1] if pool[i].name in keep_clear]
+    for i in first:
+        place_clear(i, 20 * tries, REQUIRED_MAX_R_M, pool[i].spec.writing)
+    chosen_w = [i for i in chosen_w if i not in first]
+    for i in chosen_s:
+        if i not in first:
+            place_clear(i, tries, None, False)
 
     for i in chosen_w:
         it = pool[i]
@@ -600,6 +657,8 @@ def sample_desk(
             else:
                 xy = _sample_xy(rng)
             p0, p1 = _segment(xy, yaw, half_len)
+            if not _on_desk(p0, p1, radius):
+                continue
             shape = _Shape(it.name, p0, p1, radius, 0.0, it.name not in keep_clear, 0)
             hits = [o for o in placed if shape.gap(o) < CLEARANCE_M]
             if not stack:
@@ -629,7 +688,7 @@ def sample_desk(
                     xy, yaw = _sample_xy(rng), float(rng.uniform(-math.pi, math.pi))
                     p0, p1 = _segment(xy, yaw, half_len)
                     shape = _Shape(it.name, p0, p1, radius, 2 * hz, True, 0)
-                    if all(shape.gap(o) >= CLEARANCE_M for o in placed):
+                    if _on_desk(p0, p1, radius) and all(shape.gap(o) >= CLEARANCE_M for o in placed):
                         placed.append(shape)
                         out[i] = Placement(it.name, it.kind, True, (float(xy[0]), float(xy[1]), hz), yaw, **look(i))
                         break

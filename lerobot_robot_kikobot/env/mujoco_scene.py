@@ -83,6 +83,9 @@ def _add_materials(spec: mujoco.MjSpec, room: RoomSpec, textures: bool = True) -
 
 def prism_vertices(p: Part) -> np.ndarray:
     """The corners of a prism part, about its centre."""
+    if p.extrude == "x":
+        hx = p.half[0]
+        return np.array([(s * hx, y, z) for s in (-1.0, 1.0) for y, z in p.profile], dtype=float)
     hy = p.half[1]
     return np.array([(x, s * hy, z) for s in (-1.0, 1.0) for x, z in p.profile], dtype=float)
 
@@ -110,13 +113,13 @@ def _add_part(spec: mujoco.MjSpec, p: Part) -> None:
 
 def _spots(l) -> list[tuple[str, list[float], bool]]:
     """MuJoCo lights for one room light: (name, position, casts a shadow).
-    A tube is a row of spots along Y; only the middle one casts a shadow."""
+    A tube is a row of spots along X; only the middle one casts a shadow."""
     if l.kind != "tube":
         return [(_light_name(l.name), list(l.pos), l.castshadow)]
     out = []
     for k in range(TUBE_SPOTS):
-        y = l.pos[1] + l.length * ((k + 0.5) / TUBE_SPOTS - 0.5)
-        out.append((f"{_light_name(l.name)}_{k}", [l.pos[0], y, l.pos[2]], l.castshadow and k == TUBE_SPOTS // 2))
+        x = l.pos[0] + l.length * ((k + 0.5) / TUBE_SPOTS - 0.5)
+        out.append((f"{_light_name(l.name)}_{k}", [x, l.pos[1], l.pos[2]], l.castshadow and k == TUBE_SPOTS // 2))
     return out
 
 

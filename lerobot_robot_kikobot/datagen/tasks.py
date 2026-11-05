@@ -37,10 +37,8 @@ class TaskSpec:
 
 _STATION_WORDS = {
     "pen_cup": "the pen cup",
-    "marker_cup": "the marker cup",
     "tape_peg": "the tape holder",
     "supply_tray": "the supply tray",
-    "long_tray": "the long tray",
 }
 
 _ITEM_WORDS = {
@@ -50,8 +48,8 @@ _ITEM_WORDS = {
     "sharpener": "pencil sharpener",
 }
 
-# supply_tray has three compartments for four kinds; the two small ones share.
-_COMPARTMENTS = {"glue_stick": 0, "eraser": 1, "sharpener": 2, "paper_clip_box": 2}
+# Per-kind compartments, for a tray with more than one (the desk's has one).
+_COMPARTMENTS: dict[str, int] = {}
 
 _STRATEGY = {
     "pen": "cup_insert",

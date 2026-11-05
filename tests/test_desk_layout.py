@@ -55,8 +55,8 @@ def test_one_placement_per_item_and_counts():
         assert [p.name for p in lay] == [it.name for it in pool]
         w = sum(p.active and L.KINDS[p.kind].writing for p in lay)
         s = sum(p.active and not L.KINDS[p.kind].writing for p in lay)
-        # Asked for 6..14 and 3..8; a crowded desk can fit fewer writing tools.
-        assert 3 <= w <= 7 and 2 <= s <= 4
+        # The arm's corner leaves room for a small desk: 2-4 writing tools, 1-2 supplies.
+        assert 2 <= w <= 4 and 1 <= s <= 2
 
 
 def test_active_items_in_reach_and_parked_ones_out_of_the_way():
@@ -171,13 +171,9 @@ def test_every_size_is_workable():
         elif kind not in ("scissors", "sticky_notes"):
             assert 2 * hy + 0.016 <= jaws, (kind, half)  # Gripped across, with clearance.
         if st.name == "supply_tray":
-            # Laid across one of its compartments.
-            assert 2 * hx < 2 * st.half[1] - 0.008 and 2 * hy < 2 * st.half[0] / 3 - 0.008, (kind, half)
-        elif st.name == "long_tray":
+            # Laid along it.
             assert hx < st.half[0] - 0.01 and hy < st.half[1] - 0.004, (kind, half)
-        elif st.name == "note_mat":
-            assert max(hx, hy) < st.half[0], (kind, half)
-        elif st.name in ("pen_cup", "marker_cup"):
+        elif st.name == "pen_cup":
             r_in = next(p for p in st.parts if p.name == "visual").half[0]
             assert max(hy, hz) < r_in - 0.01, (kind, half)
 
@@ -225,16 +221,24 @@ def test_stations_are_on_the_desk_and_in_reach():
     (x0, x1), (y0, y1) = R.DESK_X, R.DESK_Y
     for st in L.STATIONS:
         r = math.hypot(*st.xy)
-        assert 0.15 < r < 0.33, st.name
+        assert 0.2 < r < 0.33, st.name
         # Every corner of its footprint on the desk, clear of the hutch's side panels.
         c, s = math.cos(st.yaw), math.sin(st.yaw)
         for a in (-1, 1):
             for b in (-1, 1):
                 x = st.xy[0] + c * a * st.half[0] - s * b * st.half[1]
                 y = st.xy[1] + s * a * st.half[0] + c * b * st.half[1]
-                assert x0 + R.HUTCH_PANEL_T < x < x1 and y0 + R.HUTCH_PANEL_T < y < y1 - R.HUTCH_PANEL_T, st.name
+                assert x0 + R.HUTCH_PANEL_T < x < x1 - R.HUTCH_PANEL_T and y0 < y < y1, st.name
+        # Out where the arm faces at rest, clear of the left side panel.
+        assert st.xy[0] - max(st.half) > 0.05, st.name
         # Not in the arm's blind spot, where J1 runs out of range.
         assert not -100.0 < math.degrees(math.atan2(st.xy[1], st.xy[0])) < -40.0, st.name
+
+
+def test_desk_bounds_agree_with_the_room():
+    from lerobot_robot_kikobot.env import room as R
+
+    assert np.allclose(L.DESK_X, R.DESK_X) and np.allclose(L.DESK_Y, R.DESK_Y)
 
 
 def test_layout_agrees_with_the_room():
@@ -252,12 +256,37 @@ def test_every_kind_has_a_station():
     assert len(accepted) == len(set(accepted)) == len(L.KINDS)
 
 
+def _station_outline(st, n=24):
+    """Points round a station's footprint: a circle for a round one, else its box."""
+    if st.half[0] == st.half[1] and any(p.shape in ("tube", "cylinder") for p in st.parts):
+        return [(st.xy[0] + st.half[0] * math.cos(t), st.xy[1] + st.half[0] * math.sin(t))
+                for t in np.linspace(0, 2 * math.pi, n, endpoint=False)]
+    c, s = math.cos(st.yaw), math.sin(st.yaw)
+    out = []
+    for u in np.linspace(-1, 1, 7):
+        for v in (-1, 1):
+            for a, b in ((u, v), (v, u)):
+                out.append((st.xy[0] + c * a * st.half[0] - s * b * st.half[1],
+                            st.xy[1] + s * a * st.half[0] + c * b * st.half[1]))
+    return out
+
+
+def _inside(st, p, pad):
+    d = np.asarray(p) - np.asarray(st.xy)
+    if st.half[0] == st.half[1] and any(q.shape in ("tube", "cylinder") for q in st.parts):
+        return np.hypot(*d) < st.half[0] + pad
+    c, s = math.cos(st.yaw), math.sin(st.yaw)
+    lx, ly = c * d[0] + s * d[1], -s * d[0] + c * d[1]
+    return abs(lx) < st.half[0] + pad and abs(ly) < st.half[1] + pad
+
+
 def test_stations_do_not_overlap():
     for i, a in enumerate(L.STATIONS):
         for b in L.STATIONS[i + 1 :]:
-            gap = math.dist(a.xy, b.xy) - math.hypot(*a.half) - math.hypot(*b.half)
-            assert gap > 0.005, (a.name, b.name)
-        assert math.hypot(*a.xy) - math.hypot(*a.half) > L.BASE_KEEPOUT_M
+            assert not any(_inside(b, p, 0.005) for p in _station_outline(a)), (a.name, b.name)
+        # Clear of the arm's 20 cm square base plate.
+        for p in _station_outline(a):
+            assert max(abs(p[0]), abs(p[1])) > 0.105, a.name
 
 
 def test_station_parts_sit_on_the_desk():

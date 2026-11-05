@@ -24,10 +24,11 @@ All of them share one action space: `J1.pos` to `J6.pos` in degrees, and
 it, runs on the others.
 
 The simulated scene is a study desk with a hutch and a tube light, in a room
-lit by eight downlights. The arm stands in the desk's front-left corner,
-next to a stationery sorting station: cups, a tape peg and trays, plus
-real-sized pens, pencils, markers, tape rolls and other supplies to tidy
-into them. One camera watches the arm and the items. See [docs/sim.md](docs/sim.md).
+lit by eight downlights. The arm's base sits flush in the desk's front-left
+corner, with a stationery sorting station around it: a pen cup, a tape peg
+and a supply tray, plus real-sized pens, pencils, markers, tape rolls and
+other supplies to tidy into them. One camera, low on the corner's diagonal,
+watches the arm and the items. See [docs/sim.md](docs/sim.md).
 
 ## What is in the repository
 

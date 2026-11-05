@@ -9,6 +9,7 @@ import pytest
 from lerobot_robot_kikobot import follower as follower_mod
 from lerobot_robot_kikobot.config import KikobotFollowerConfig
 from lerobot_robot_kikobot.follower import KikobotFollower
+from lerobot_robot_kikobot.paths import ARM_SCENE_PATH
 from lerobot_robot_kikobot.sim_server import SimServer, SimWorld
 
 from test_sim_server import free_port
@@ -79,7 +80,9 @@ def test_first_move_is_slow(arm):
 
 def test_commands_are_mirrored_to_the_sim(arm):
     port = free_port()
-    server = SimServer(SimWorld("empty"), port=port, viewer=False)
+    # The arm alone: in the room it starts upright, and turned that way its
+    # shoulder meets the hutch's side panel beside its base.
+    server = SimServer(SimWorld(ARM_SCENE_PATH), port=port, viewer=False)
     thread = threading.Thread(target=server.serve, daemon=True)
     thread.start()
     try:
